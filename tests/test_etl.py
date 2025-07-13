@@ -26,7 +26,7 @@ def sample_config():
             }
         },
         "query": {
-            "sql": "SELECT * FROM customers JOIN orders ON customers.id = orders.customer_id",
+            "sql": "SELECT * FROM customers JOIN orders ON customers.customer_id = orders.customer_id",
             "target_table": "output_table"
         },
         "mapping": {

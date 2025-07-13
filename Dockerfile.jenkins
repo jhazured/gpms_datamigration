@@ -1,31 +1,52 @@
 # Use slim Python base with 3.10
 FROM python:3.10-slim-bullseye
 
-# Install Java for PySpark
+# Install Java for PySpark and required system tools
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openjdk-11-jre && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    openjdk-11-jre \
+    procps \
+    curl wget unzip git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for Java
+# Set Java environment variables
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
-# Set PYTHONPATH to /app so Python can locate the framework package
+# ------------------------
+# Install Spark manually
+# ------------------------
+ENV SPARK_VERSION=3.5.1
+ENV HADOOP_VERSION=3
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$SPARK_HOME/bin:$PATH
+
+RUN wget https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+    tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz -C /opt && \
+    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} /opt/spark && \
+    rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+
+# ------------------------
+# PySpark needs absolute HOME for Ivy
+# ------------------------
+ENV HOME=/root
+
+# Add PYTHONPATH for local imports
 ENV PYTHONPATH=/app
 
 # Set working directory for app code
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache for dependencies
+# Copy requirements first (better Docker cache)
 COPY requirements/prod.txt .
 
-# Install Python dependencies from requirements file
+# Install Python dependencies
 RUN pip install --no-cache-dir -r prod.txt
 
 # Install pytest explicitly for testing
 RUN pip install --no-cache-dir pytest
 
-# Copy application code folders
+# Copy application code
 COPY framework/ framework/
 COPY etls/ etls/
 
@@ -34,5 +55,8 @@ COPY scripts/tasks.sh .
 COPY scripts/run_pytest.sh .
 COPY scripts/run_bash.sh .
 
-# Default command runs the main ETL script (can be overridden)
+# (Optional) Expose Spark UI ports for debug
+EXPOSE 4040
+
+# Default command: run ETL main
 CMD ["python", "framework/main.py"]

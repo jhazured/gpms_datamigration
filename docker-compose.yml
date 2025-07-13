@@ -39,7 +39,6 @@ services:
     command: ["pytest", "tests/", "--maxfail=3", "--disable-warnings", "-q"]
     env_file:
       - .env.test
-    user: "${UID}:${GID}"
 
 volumes:
   gpms_datamigration:
