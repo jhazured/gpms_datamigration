@@ -1,0 +1,39 @@
+job_name: "product_inventory_report_{{ report_date }}"
+
+sources:
+  products:
+    type: table
+    connection: warehouse_db
+    query: 
+      "SELECT product_id, product_name, category, stock_quantity
+      FROM products
+      WHERE stock_quantity <= {{ min_stock_threshold | default(50) }}
+      {% if category_filter is defined and category_filter %}
+      AND category = '{{ category_filter }}'
+      {% endif %}"
+
+query:
+  target_table: product_inventory_report_{{ report_date }}
+  sql: 
+    "SELECT
+      product_id,
+      product_name,
+      category,
+      stock_quantity,
+      CASE
+        WHEN stock_quantity <= {{ critical_stock_level | default(10) }} THEN 'Critical'
+        WHEN stock_quantity <= {{ low_stock_level | default(30) }} THEN 'Low'
+        ELSE 'Normal'
+      END AS stock_status
+    FROM products
+    WHERE stock_quantity <= {{ min_stock_threshold | default(50) }}
+    {% if category_filter is defined and category_filter %}
+    AND category = '{{ category_filter }}'
+    {% endif %}"
+
+mapping:
+  product_id: prod_id
+  product_name: prod_name
+  category: prod_category
+  stock_quantity: qty_in_stock
+  stock_status: stock_alert_level

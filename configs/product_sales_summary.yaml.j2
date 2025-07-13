@@ -1,0 +1,37 @@
+job_name: "product_sales_summary"
+
+sources:
+  orders:
+    type: query
+    connection: my_database
+    query: "SELECT order_id, product_id, order_amount, order_date FROM orders WHERE status = 'COMPLETE'"
+
+  products:
+    type: query
+    connection: my_database
+    query: "SELECT product_id, product_name, category FROM products"
+
+query:
+  target_table: product_sales_summary
+  sql: "SELECT
+      p.product_id,
+      p.product_name,
+      p.category,
+      COUNT(o.order_id) AS orders_count,
+      SUM(o.order_amount) AS total_revenue,
+      AVG(o.order_amount) AS avg_order_value
+    FROM
+      products p
+      LEFT JOIN orders o ON p.product_id = o.product_id
+    WHERE
+      o.order_date >= '2024-01-01'
+    GROUP BY
+      p.product_id, p.product_name, p.category"
+
+mapping:
+  product_id: prod_id
+  product_name: prod_name
+  category: prod_category
+  orders_count: total_orders
+  total_revenue: revenue_total
+  avg_order_value: average_order_value

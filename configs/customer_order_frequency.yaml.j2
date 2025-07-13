@@ -1,0 +1,33 @@
+job_name: "customer_order_frequency"
+
+sources:
+  customers:
+    type: table
+    connection: my_database
+    query: "SELECT customer_id, customer_name, active FROM customers"
+
+  orders:
+    type: query
+    connection: my_database
+    query: "SELECT order_id, customer_id, order_date FROM orders WHERE status = 'COMPLETE'"
+
+query:
+  target_table: customer_order_frequency
+  sql: "SELECT
+      c.customer_id,
+      COUNT(o.order_id) AS total_orders,
+      COUNT(DISTINCT DATE_TRUNC('month', o.order_date)) AS active_months,
+      ROUND(COUNT(o.order_id) * 1.0 / NULLIF(COUNT(DISTINCT DATE_TRUNC('month', o.order_date)), 0), 2) AS avg_orders_per_month
+    FROM
+      customers c
+      LEFT JOIN orders o ON c.customer_id = o.customer_id
+    WHERE
+      c.active = TRUE
+    GROUP BY
+      c.customer_id"
+
+mapping:
+  customer_id: cust_id
+  total_orders: total_order_count
+  active_months: months_active
+  avg_orders_per_month: avg_monthly_orders
