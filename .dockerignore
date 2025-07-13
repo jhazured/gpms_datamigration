@@ -1,0 +1,31 @@
+# Git repository files
+.git
+.gitignore
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local environment and config files
+.env
+.env.*
+
+# Dockerfiles and Compose files (optional if not needed in image)
+Dockerfile*
+docker-compose.yml
+
+# Jupyter notebooks (optional)
+notebooks/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# IDE/editor config files
+.vscode/
+.idea/
+*.swp
+*.swo

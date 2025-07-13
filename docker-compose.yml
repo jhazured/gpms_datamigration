@@ -1,5 +1,8 @@
 services:
   jupyterlab:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.jupyter
     image: gpms_jupyter_pyspark:latest
     container_name: gpms_jupyterlab
     ports:
@@ -8,8 +11,12 @@ services:
       - ./notebooks:/home/jupyteruser/notebooks
     env_file:
       - .env.dev
+    user: "${UID}:${GID}"
 
   etl_runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins  # Adjust if you named it differently
     image: gpms_etl_runner:latest
     container_name: gpms_etl_runner
     volumes:
@@ -18,9 +25,13 @@ services:
       - .env.prod
     tty: true
     stdin_open: true
+    user: "${UID}:${GID}"
 
   etl_test:
-    image: gpms_jupyter_pyspark:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev-ubuntu  # Adjust if needed
+    image: gpms_etl_runner:latest
     container_name: gpms_etl_test_runner
     volumes:
       - ./:/app
@@ -28,8 +39,7 @@ services:
     command: ["pytest", "tests/", "--maxfail=3", "--disable-warnings", "-q"]
     env_file:
       - .env.test
+    user: "${UID}:${GID}"
 
 volumes:
   gpms_datamigration:
-    # Named volume managed by Docker; no host path needed
-

@@ -6,7 +6,7 @@ pipeline {
     }
 
     environment {
-        // You can define any global env vars here if needed
+        // Define any global env vars if needed
     }
 
     stages {
@@ -28,7 +28,6 @@ pipeline {
         stage('Prepare Environment File') {
             steps {
                 script {
-                    // Map environment to Jenkins credentials ID
                     def credIdMap = [
                         dev: 'gcp_dev_credentials',
                         test: 'gcp_test_credentials',
@@ -38,9 +37,7 @@ pipeline {
 
                     def selectedCredId = credIdMap[params.ENV]
 
-                    // Retrieve GCP credentials file and write .env dynamically
                     withCredentials([file(credentialsId: selectedCredId, variable: 'GCP_KEYFILE')]) {
-                        // Copy credentials to workspace and create .env file
                         sh """
                             cp \$GCP_KEYFILE ./gcp_key.json
                             echo 'GOOGLE_APPLICATION_CREDENTIALS=/app/gcp_key.json' > .env.${params.ENV}
@@ -51,10 +48,20 @@ pipeline {
             }
         }
 
+        stage('Run Tests') {
+            steps {
+                script {
+                    // Run tests with coverage inside the etl_test container
+                    sh """
+                        docker compose run --rm --env-file .env.${params.ENV} etl_test pytest --cov=framework --cov-report=term-missing -v
+                    """
+                }
+            }
+        }
+
         stage('Run Docker Compose') {
             steps {
                 script {
-                    // Use docker compose to start containers, passing env file for selected environment
                     sh """
                         docker compose --env-file .env.${params.ENV} up --build --abort-on-container-exit
                     """
@@ -65,7 +72,6 @@ pipeline {
         stage('Clean Up') {
             steps {
                 script {
-                    // Clean up containers and images optionally
                     sh """
                         docker compose down --volumes
                         docker image prune -f

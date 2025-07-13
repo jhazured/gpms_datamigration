@@ -1,42 +1,35 @@
-# ------------------------
 # Use slim Python base with 3.10
-# ------------------------
-FROM python:3.10-slim
+FROM python:3.10-slim-bullseye
 
-# ------------------------
 # Install Java for PySpark
-# ------------------------
 RUN apt-get update && \
-    apt-get install -y openjdk-11-jre-headless && \
+    apt-get install -y --no-install-recommends openjdk-11-jre && \
     rm -rf /var/lib/apt/lists/*
 
+# Set environment variables for Java
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
-# ------------------------
-# Set working dir for app code
-# ------------------------
+# Set working directory for app code
 WORKDIR /app
 
-# ------------------------
-# Copy full project code
-# ------------------------
+# Copy requirements first to leverage Docker cache for dependencies
+COPY requirements/prod.txt .
+
+# Install Python dependencies from requirements file
+RUN pip install --no-cache-dir -r prod.txt
+
+# Install pytest explicitly for testing
+RUN pip install --no-cache-dir pytest
+
+# Copy application code folders
 COPY framework/ framework/
-COPY configs/ configs/
-COPY requirements/ requirements/
-COPY etl_script.py .
-COPY main.py .
-COPY tasks.sh .
-COPY run_pytest.sh .
-COPY run_bash.sh .
+COPY etls/ etls/
 
-# ------------------------
-# Install dependencies
-# ------------------------
-RUN pip install --no-cache-dir pyspark pandas pyyaml pytest
+# Copy helper scripts
+COPY scripts/tasks.sh .
+COPY scripts/run_pytest.sh .
+COPY scripts/run_bash.sh .
 
-# ------------------------
-# Default command runs your ETL script
-# (you can override with Jenkins args)
-# ------------------------
-CMD ["python", "main.py"]
+# Default command runs the main ETL script (can be overridden)
+CMD ["python", "framework/main.py"]

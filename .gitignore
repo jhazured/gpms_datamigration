@@ -1,28 +1,38 @@
-# Byte-compiled / cache
+# Python
 __pycache__/
-*.py[cod]
-
-# Virtual env
-venv/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
 .env
-*.env
+.env.*
+.gcp_key.json
 
-# Jupyter Notebook checkpoints
+# Virtual environments
+env/
+venv/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
 .ipynb_checkpoints/
 
-# Local output
-notebooks/
+# Docker
 *.log
-
-# PySpark temp output
-tmp/
-*.parquet
-
-# Docker files
 *.pid
+*.pid.lock
 
-# VS Code settings (optional)
-.vscode/
-
-# OS files
-.DS_Store
+# Data output
+jobs-output/
+*.parquet
+*.csv

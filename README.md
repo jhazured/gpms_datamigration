@@ -1,53 +1,67 @@
-Suggestions for Improvement
-README.md content:
-Ensure your README explains:
+# GPMS Data Migration
 
-How to set up environment variables (local vs Jenkins).
+A modular ETL framework for migrating and reporting on GPMS data. Uses **YAML/Jinja** configurations, Python ETL modules, and Dockerized development and testing environments.
 
-How to run tests and ETL jobs locally and in Docker.
+---
 
-Overview of folder structure and responsibilities.
+## Project Structure
 
-Version control of secrets:
+├── etls/                 # YAML/Jinja templates for ETL jobs
+├── framework/            # ETL framework code (extract, transform, load, utils)
+├── tests/                # Unit tests and test data
+├── requirements/         # Python dependencies for different environments
+├── docker/               # Dockerfiles for dev, Jupyter, CI/CD
+├── scripts/              # Helper scripts for local development and testing
+├── Dockerfile.jenkins    # Dockerfile for Jenkins pipeline
+├── Jenkinsfile           # Jenkins pipeline definition
+├── docker-compose.yml    # Multi-container development/test environment
 
-Confirm .env.* files with secrets are excluded from version control (.gitignore).
+---
 
-Provide a sample .env.example for developers.
+## Setup
 
-Logging and error handling:
+### 1. Clone the repo  
+git clone https://github.com/jhazured/gpms_datamigration.git  
+cd gpms_datamigration
 
-Ensure ETL scripts and framework handle errors gracefully and log meaningful messages.
+### 2. Build and run with Docker Compose  
+docker-compose up --build
 
-Consider adding a centralized logging utility in utils.py.
+### 3. Adding a new ETL job  
+- Create a new YAML or YAML/Jinja config in the `etls/` folder.  
+- Follow the structure of the existing templates (e.g., `customer_sales_summary.yaml.j2`).  
+- Reference the new config in `framework/main.py` or your orchestration tool.
 
-Parameterize configs/ folder path:
+### 4. Run an ETL  
+Use the helper script to start a Docker session with the ETL environment:  
+bash scripts/run_bash.sh  
+Once inside the Docker session, you can:  
+cd jobs-output  
+ls -l  
+cat customer_order_frequency.txt  
+grep "search_term" *.txt
 
-Make the path to ETL YAMLs configurable in main.py or via environment variables for flexibility.
+### 5. Run tests  
+Run all tests with the helper script:  
+bash scripts/run_pytest.sh etls/customer_order_frequency
 
-Testing coverage:
+---
 
-Add unit tests for all ETL components in tests/, including edge cases and failure modes.
+## CI/CD  
+- Jenkins pipeline is defined in the `Jenkinsfile`.  
+- Uses `Dockerfile.jenkins` for the pipeline build environment.
 
-Include integration tests that run full ETL jobs against mock data.
+---
 
-Documentation for notebooks/:
+## Notes  
+- **Do NOT** commit secrets — store credentials securely and use environment variables.  
+- Use `.gitignore` to exclude `__pycache__`, `.env`, and other local-only files.
 
-If notebooks are only for dev/debug, consider a README inside notebooks/ explaining their purpose and usage.
+---
 
-Task automation:
+## Contact  
+For questions, open an issue or contact the repo owner.
 
-Consider adding a Makefile or invoke tasks for running common commands (pytest, building images, cleaning containers).
+---
 
-Dependency management:
-
-If using multiple requirements files, consider pip-tools or poetry for easier management and lock files.
-
-Docker optimizations:
-
-Review Dockerfiles for caching best practices to speed up rebuilds.
-
-Document how to extend or customize containers if needed.
-
-Overall, your project structure and setup demonstrate solid engineering practices and a good foundation for scalable ETL development and deployment. With a bit more documentation, testing, and polish on environment/config management, you’ll have a very robust system!
-
-Want me to help draft a README template or test plan?
+If you want me to format anything else or add more sections, just let me know!

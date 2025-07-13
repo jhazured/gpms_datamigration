@@ -1,0 +1,2 @@
+-r prod.txt
+# Add any UAT-specific packages here if needed
