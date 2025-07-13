@@ -36,3 +36,6 @@ htmlcov/
 jobs-output/
 *.parquet
 *.csv
+
+# Pytest cache
+.pytest_cache/
