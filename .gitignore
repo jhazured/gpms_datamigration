@@ -1,0 +1,28 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Virtual env
+venv/
+.env
+*.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local output
+notebooks/
+*.log
+
+# PySpark temp output
+tmp/
+*.parquet
+
+# Docker files
+*.pid
+
+# VS Code settings (optional)
+.vscode/
+
+# OS files
+.DS_Store

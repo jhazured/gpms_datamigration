@@ -1,0 +1,49 @@
+job_name: "customer_sales_summary"
+
+sources:
+  customers:
+    type: table
+    connection: my_database
+    query: "SELECT customer_id, customer_name, total_spent, active FROM customers"
+
+  orders:
+    type: query
+    connection: my_database
+    query: "SELECT order_id, customer_id, product_id, order_amount, order_date
+      FROM orders
+      WHERE status = 'COMPLETE'"
+
+  products:
+    type: query
+    connection: my_database
+    query: "SELECT product_id, product_name, category FROM products"
+
+query:
+  target_table: customer_sales_summary
+  sql: "SELECT
+      c.customer_id,
+      CASE
+        WHEN c.total_spent > 10000 THEN 'Platinum'
+        WHEN c.total_spent > 5000 THEN 'Gold'
+        ELSE 'Silver'
+      END AS loyalty_tier,
+      COUNT(o.order_id) AS order_count,
+      SUM(o.order_amount) AS total_sales
+    FROM
+      customers c
+      INNER JOIN orders o ON o.customer_id = c.customer_id
+      INNER JOIN products p ON o.product_id = p.product_id
+    WHERE
+      o.order_date >= '2024-01-01'
+      AND c.active = TRUE
+    GROUP BY
+      c.customer_id,
+      loyalty_tier"
+
+mapping:
+  customer_id: cust_id
+  loyalty_tier: tier
+  order_count: num_orders
+  total_sales: sales_total
+
+

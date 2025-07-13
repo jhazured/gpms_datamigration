@@ -1,0 +1,35 @@
+services:
+  jupyterlab:
+    image: gpms_jupyter_pyspark:latest
+    container_name: gpms_jupyterlab
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jupyteruser/notebooks
+    env_file:
+      - .env.dev
+
+  etl_runner:
+    image: gpms_etl_runner:latest
+    container_name: gpms_etl_runner
+    volumes:
+      - gpms_datamigration:/home/etl_user/jobs-output
+    env_file:
+      - .env.prod
+    tty: true
+    stdin_open: true
+
+  etl_test:
+    image: gpms_jupyter_pyspark:latest
+    container_name: gpms_etl_test_runner
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: ["pytest", "tests/", "--maxfail=3", "--disable-warnings", "-q"]
+    env_file:
+      - .env.test
+
+volumes:
+  gpms_datamigration:
+    # Named volume managed by Docker; no host path needed
+
