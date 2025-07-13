@@ -10,6 +10,9 @@ RUN apt-get update && \
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
+# Set PYTHONPATH to /app so Python can locate the framework package
+ENV PYTHONPATH=/app
+
 # Set working directory for app code
 WORKDIR /app
 
