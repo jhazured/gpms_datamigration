@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'ENV', choices: ['dev', 'test', 'uat', 'prod'], description: 'Select environment')
+        choice(
+            name: 'ACTION',
+            choices: ['build_image', 'deploy_script', 'trigger_run', 'delete'],
+            description: 'Select action to perform'
+        )
+        choice(
+            name: 'ETL_SCRIPT',
+            choices: ['', 'customer_order_frequency', 'sales_etl', 'inventory_etl'],
+            description: 'Select ETL script (required for deploy, trigger, or delete)'
+        )
+        string(name: 'EXTRA_ARGS', defaultValue: '', description: 'Additional arguments to pass to the scripts')
+    }
+
+    stages {
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    echo "Validating parameters..."
+                    echo "ENV: ${params.ENV}"
+                    echo "ACTION: ${params.ACTION}"
+                    echo "ETL_SCRIPT: ${params.ETL_SCRIPT}"
+                    echo "EXTRA_ARGS: '${params.EXTRA_ARGS}'"
+
+                    if ((params.ACTION in ['deploy_script', 'trigger_run', 'delete']) && !params.ETL_SCRIPT?.trim()) {
+                        error("ETL_SCRIPT parameter is required when ACTION is 'deploy_script', 'trigger_run', or 'delete'")
+                    }
+
+                    echo "Parameter validation successful."
+                }
+            }
+        }
+
+        stage('Perform Action') {
+            steps {
+                script {
+                    def extraArgs = params.EXTRA_ARGS?.trim() ? " ${params.EXTRA_ARGS}" : ""
+                    echo "Prepared extra arguments: '${extraArgs.trim()}'"
+
+                    if (params.ACTION == 'build_image') {
+                        echo "Running build image commands..."
+                        sh """
+                            echo "Building Docker image for environment: ${params.ENV}"
+                            ./scripts/tasks.sh build ${params.ENV}${extraArgs}
+                            echo "Pushing Docker image for environment: ${params.ENV}"
+                            ./scripts/tasks.sh push ${params.ENV}${extraArgs}
+                        """
+                    } else if (params.ACTION == 'deploy_script') {
+                        echo "Running deploy ETL script commands..."
+                        sh """
+                            echo "Deploying ETL script '${params.ETL_SCRIPT}' to environment: ${params.ENV}"
+                            ./scripts/deploy_etl.sh --env ${params.ENV} --script ${params.ETL_SCRIPT}${extraArgs}
+                        """
+                    } else if (params.ACTION == 'trigger_run') {
+                        echo "Running trigger ETL job commands..."
+                        sh """
+                            echo "Triggering ETL run for script '${params.ETL_SCRIPT}' on environment: ${params.ENV}"
+                            ./scripts/trigger_gcp_run.sh --env ${params.ENV} --script ${params.ETL_SCRIPT}${extraArgs}
+                        """
+                    } else if (params.ACTION == 'delete') {
+                        echo "Running delete ETL script commands..."
+                        sh """
+                            echo "Deleting ETL artifacts for script '${params.ETL_SCRIPT}' on environment: ${params.ENV}"
+                            ./scripts/delete_etl.sh --env ${params.ENV} --script ${params.ETL_SCRIPT}${extraArgs}
+                        """
+                    } else {
+                        error("Unknown ACTION parameter value: ${params.ACTION}")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully.'
+        }
+        failure {
+            echo 'Pipeline failed. Check the logs for details.'
+        }
+    }
+}

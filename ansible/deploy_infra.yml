@@ -41,7 +41,7 @@
         tag: "{{ image_tag }}"
         build:
           path: "{{ playbook_dir }}/.."
-          dockerfile: "{{ docker/Dockerfile.ubuntu }}"
+          dockerfile: "{{ docker/Dockerfile.ansible }}"
           pull: yes
           nocache: yes
           args:

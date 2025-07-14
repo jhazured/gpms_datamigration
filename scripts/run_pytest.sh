@@ -2,15 +2,13 @@
 
 ETL_NAME=$1
 
-echo "Running pytest tests inside Docker..."
+echo "Running pytest tests inside the running etl_runner container..."
 
-docker run --rm -v "$(pwd)":/app -w /app gcp_etl_runner:latest bash -c "\
-  if [ -z \"$ETL_NAME\" ]; then \
-    pytest tests/ --maxfail=3 --disable-warnings -q; \
-  else \
-    pytest tests/ -k \"$ETL_NAME\" --maxfail=3 --disable-warnings -q; \
-  fi
-"
+if [ -z "$ETL_NAME" ]; then
+  docker compose exec etl_test pytest tests/ --maxfail=3 --disable-warnings -q --junitxml=/app/data/test-results.xml
+else
+  docker compose exec etl_test pytest tests/ -k "$ETL_NAME" --maxfail=3 --disable-warnings -q --junitxml=/app/data/test-results.xml
+fi
 
 exit_code=$?
 
@@ -21,3 +19,4 @@ else
 fi
 
 exit $exit_code
+

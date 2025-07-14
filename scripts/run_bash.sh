@@ -10,18 +10,16 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Set container name
-CONTAINER_NAME="local_test_container"
+CONTAINER_NAME="local_etl_bash"
 
-# Run Docker container interactively with the given name
+# Run Docker container interactively with the given name and mounted volume
 docker run -it --name "$CONTAINER_NAME" \
-  -v gcp_datamigration:/home/etl_user/jobs-output \
-  --user root \
-  --name gcp_etl_runner_bash \
-  gcp_etl_runner:latest \
+  -v gcp_datamigration:/app/data \
+  --user devuser \
+  my_etl_image:dev \
   bash -c "
-    # Create the data directory if it doesn't exist
-    mkdir -p /home/etl_user/jobs-output/data && \
-    chmod -R 0777 /home/etl_user/jobs-output && \
+    mkdir -p /app/data && \
+    chmod -R 0777 /app/data && \
     exec bash
   "
 

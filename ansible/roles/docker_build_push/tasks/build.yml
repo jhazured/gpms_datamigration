@@ -6,9 +6,9 @@
       path: "{{ playbook_dir }}/../../"
       dockerfile: >-
         {{
-          'docker/Dockerfile.dev-ubuntu'
+          'docker/Dockerfile.ubuntu'
           if env == 'dev' else
-          'Dockerfile.jenkins'
+          'docker/Dockerfile.jenkins'
         }}
       pull: yes
       nocache: yes

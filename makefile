@@ -12,18 +12,6 @@ build:
 	$(DC) build
 
 # -------------------------------
-# 🚀 Run JupyterLab
-# -------------------------------
-jupyter:
-	$(DC) up jupyterlab
-
-# -------------------------------
-# 🏃 Run ETL job container
-# -------------------------------
-etl:
-	$(DC) up etl_runner
-
-# -------------------------------
 # ✅ Run tests
 # -------------------------------
 test:
@@ -34,12 +22,6 @@ test:
 # -------------------------------
 clean:
 	$(DC) down -v --remove-orphans
-
-# -------------------------------
-# 🔍 Lint (optional placeholder)
-# -------------------------------
-lint:
-	flake8 framework/ tests/
 
 # -------------------------------
 # 🆙 Bring everything up (dev)

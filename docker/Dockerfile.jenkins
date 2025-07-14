@@ -3,34 +3,32 @@
 # -------------------------------
 FROM python:3.10-slim-bullseye AS builder
 
-# Install Java + build tools
+# Install Java and minimal build tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    openjdk-11-jre \
-    curl wget unzip git ca-certificates && \
+      openjdk-11-jre-headless \
+      curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Set Java env
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
-# Install Spark manually
+# Install Spark manually using curl
 ENV SPARK_VERSION=3.5.1
 ENV HADOOP_VERSION=3
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$SPARK_HOME/bin:$PATH
 
-RUN wget --no-verbose https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
-    tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz -C /opt && \
-    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} ${SPARK_HOME} && \
-    rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+RUN curl -sSL https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz \
+    | tar -xz -C /opt && \
+    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} ${SPARK_HOME}
 
-# Upgrade pip & install dependencies
 WORKDIR /install
+
 COPY requirements/prod.txt .
+
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r prod.txt && \
-    pip install --no-cache-dir pytest
+    pip install --no-cache-dir -r prod.txt
 
 # -------------------------------
 # 🟢 Final runtime stage
@@ -40,32 +38,24 @@ FROM python:3.10-slim-bullseye
 # Copy Java & Spark from builder
 COPY --from=builder /usr/lib/jvm /usr/lib/jvm
 COPY --from=builder /opt/spark /opt/spark
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$JAVA_HOME/bin:$SPARK_HOME/bin:$PATH
 
-# Create non-root user
 RUN useradd -ms /bin/bash etl_user
 
-# Set workdir
 WORKDIR /app
 
-# Copy Python deps from builder
-COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy the full app at once
+# Copy the app source
 COPY . .
 
-# Make helper scripts executable
-RUN chmod +x scripts/tasks.sh scripts/run_pytest.sh scripts/run_bash.sh
+RUN chmod +x scripts/tasks.sh scripts/run_pytest.sh scripts/run_bash.sh && \
+    chown -R etl_user:etl_user /app
 
-# Switch to non-root
 USER etl_user
 
-# Expose Spark UI if needed
 EXPOSE 4040
 
-# Default command
 CMD ["python", "framework/main.py"]

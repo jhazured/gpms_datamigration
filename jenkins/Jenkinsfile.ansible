@@ -27,7 +27,7 @@ pipeline {
                     def env = params.ENV
                     sh """
                         # Run Ansible playbook to configure the environment and build Docker image
-                        ansible-playbook ansible/deploy.yml --extra-vars "env=${env}"
+                        ansible-playbook ansible/deploy_infra.yml --extra-vars "env=${env}"
                     """
                 }
             }
