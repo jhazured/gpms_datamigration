@@ -12,7 +12,7 @@ class Config:
     """
 
     # Application settings
-    APP_NAME = os.getenv("APP_NAME", "gpms_datamigration_etl")
+    APP_NAME = os.getenv("APP_NAME", "gcp_datamigration_etl")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
     # Database connection details
