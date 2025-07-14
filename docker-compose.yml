@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.jupyter
-    image: gpms_jupyter_pyspark:latest
-    container_name: gpms_jupyterlab
+    image: gcp_jupyter_pyspark:latest
+    container_name: gcp_jupyterlab
     ports:
       - "8888:8888"
     volumes:
@@ -17,10 +17,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.jenkins  # Adjust if you named it differently
-    image: gpms_etl_runner:latest
-    container_name: gpms_etl_runner
+    image: gcp_etl_runner:latest
+    container_name: gcp_etl_runner
     volumes:
-      - gpms_datamigration:/home/etl_user/jobs-output
+      - gcp_datamigration:/home/etl_user/jobs-output
     env_file:
       - .env.prod
     tty: true
@@ -31,8 +31,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.dev-ubuntu  # Adjust if needed
-    image: gpms_etl_runner:latest
-    container_name: gpms_etl_test_runner
+    image: gcp_etl_runner:latest
+    container_name: gcp_etl_test_runner
     volumes:
       - ./:/app
     working_dir: /app
@@ -41,4 +41,4 @@ services:
       - .env.test
 
 volumes:
-  gpms_datamigration:
+  gcp_datamigration:
