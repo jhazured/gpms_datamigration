@@ -1,0 +1,38 @@
+# -------------------------------
+# 🟢 Ansible environment
+# -------------------------------
+FROM python:3.10-slim-bullseye
+
+# Install necessary tools for Ansible
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ansible \
+    curl wget unzip git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set working directory for Ansible playbooks
+WORKDIR /ansible
+
+# Copy ansible/requirements.yml to install Ansible collections
+COPY ansible/requirements.yml .
+
+# Install the required Ansible collections
+RUN ansible-galaxy collection install -r requirements.yml
+
+# Argument to pass which environment requirements file to copy
+ARG ENV
+
+# Copy the environment-specific requirements file
+COPY requirements/${ENV}.txt .
+
+# Install Python dependencies (for GCP, etc.)
+RUN pip install --no-cache-dir -r ${ENV}.txt
+
+# Copy the Ansible playbooks and roles from the host to the container
+COPY ansible/ /ansible/
+
+# Set the working directory for Ansible roles (optional, if needed for other tasks)
+WORKDIR /ansible/roles/docker_build_push
+
+# Default command to run when the container starts
+CMD ["ansible-playbook", "/ansible/deploy.yml"]

@@ -23,32 +23,9 @@ pipeline {
                     sh """
                         # Build Ansible container
                         docker build -f docker/Dockerfile.ansible -t ansible-image .
-                        # Run the Ansible playbook to deploy
+                        # Run the Ansible playbook to deploy and generate the .env file
                         docker run --rm -v \$(pwd):/workspace ansible-image ansible-playbook ansible/deploy.yml --extra-vars "env=${env}"
                     """
-                }
-            }
-        }
-
-        stage('Prepare Environment File') {
-            steps {
-                script {
-                    def credIdMap = [
-                        dev: 'gcp_dev_credentials',
-                        test: 'gcp_test_credentials',
-                        uat: 'gcp_uat_credentials',
-                        prod: 'gcp_prod_credentials'
-                    ]
-
-                    def selectedCredId = credIdMap[params.ENV]
-
-                    withCredentials([file(credentialsId: selectedCredId, variable: 'GCP_KEYFILE')]) {
-                        sh """
-                            cp \$GCP_KEYFILE ./gcp_key.json
-                            echo 'GOOGLE_APPLICATION_CREDENTIALS=/app/gcp_key.json' > .env.${params.ENV}
-                            echo 'OTHER_ENV_VAR=some_value' >> .env.${params.ENV}
-                        """
-                    }
                 }
             }
         }

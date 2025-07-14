@@ -1,0 +1,89 @@
+---
+- name: Setup GCP resources with Secret Manager
+  hosts: localhost
+  gather_facts: no
+  vars:
+    gcp_project_id: "your-gcp-project-id"
+    artifact_registry_name: "my-etl-repo"
+    artifact_registry_location: "us-central1"
+    service_account_name: "etl-service-account"
+    gcs_bucket_name: "my-etl-bucket"
+    env_file_template: "ansible/templates/.env.j2"  # Correct path for the template
+    service_account_email: "{{ service_account_name }}@{{ gcp_project_id }}.iam.gserviceaccount.com"  # Generate the service account email from its name
+    secret_name: "my-secret-name"  # Name of the secret in Secret Manager
+    secret_version: "latest"  # You can use "latest" or specify a version
+
+  tasks:
+    - name: Retrieve GCP credentials from Secret Manager
+      gcp_secret_manager_secret:
+        project_id: "{{ gcp_project_id }}"
+        secret_id: "{{ secret_name }}"
+        version: "{{ secret_version }}"
+      register: gcp_credentials_secret
+      no_log: true  # Avoid printing secret values in logs
+
+    - name: Create Artifact Registry repository
+      gcp_artifact_registry:
+        name: "{{ artifact_registry_name }}"
+        location: "{{ artifact_registry_location }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ gcp_credentials_secret.secret_data }}"
+        state: present
+      register: artifact_registry_result
+      failed_when: artifact_registry_result.failed  # Error handling
+
+    - name: Create Service Account
+      gcp_iam_service_account:
+        name: "{{ service_account_name }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ gcp_credentials_secret.secret_data }}"
+        state: present
+      register: service_account_result
+      failed_when: service_account_result.failed  # Error handling
+
+    - name: Assign multiple IAM roles to the service account
+      gcp_iam_service_account_role:
+        service_account_email: "{{ service_account_email }}"
+        role: "{{ item }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ gcp_credentials_secret.secret_data }}"
+        state: present
+      loop:
+        - "roles/artifactregistry.writer"
+        - "roles/storage.objectAdmin"
+        - "roles/storage.admin"
+      register: iam_role_assignment_result
+      failed_when: iam_role_assignment_result.failed  # Error handling
+
+    - name: Create GCS bucket
+      gcp_storage_bucket:
+        name: "{{ gcs_bucket_name }}"
+        project: "{{ gcp_project_id }}"
+        location: "US"
+        service_account_file: "{{ gcp_credentials_secret.secret_data }}"
+        state: present
+      register: gcs_bucket_result
+      failed_when: gcs_bucket_result.failed  # Error handling
+
+    - name: Template .env file
+      template:
+        src: "{{ env_file_template }}"  # Use the correct path to the .env.j2 template
+        dest: "/home/etl_user/.env"  # Destination path for the generated .env file
+      vars:
+        gcp_credentials_path: "{{ gcp_credentials_secret.secret_data }}"
+        gcp_project_id: "{{ gcp_project_id }}"
+        gcp_region: "{{ gcp_region }}"
+        gcp_artifact_repo: "{{ gcp_artifact_repo }}"
+        docker_image_name: "{{ docker_image_name }}"
+        docker_tag: "{{ docker_tag }}"
+        docker_repo: "{{ docker_repo }}"
+        environment: "{{ env }}"
+        custom_var_value: "{{ custom_var_value }}"
+      register: env_template_result
+      failed_when: env_template_result.failed  # Error handling
+
+    - name: Clean up any temporary files
+      file:
+        path: "/home/etl_user/.env"
+        state: absent  # If desired, you can remove the file after it is no longer needed
+      when: env_template_result.changed  # Only clean up if the .env file was generated

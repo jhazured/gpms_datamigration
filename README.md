@@ -90,6 +90,15 @@ Running_the_Playbook
     #Tag the image to point to your Artifact Registry repo.
     #Push the image to GCP Artifact Registry.
 
+Decommissioning Resources
+- To decommission all services once the project is finished, you can use the following playbook: ansible-playbook ansible/decommission_gcp_resources.yml --extra-vars "env=prod"
+
+#This will:
+    #Delete Docker images from GCP Artifact Registry.
+    #Remove GCS buckets, Cloud SQL databases, and other resources.
+    #Remove IAM roles and service accounts.
+    #Delete secrets from Google Cloud Secret Manager.
+
 Role_Task_Breakdown
 - build.yml
 #Uses community.general.docker_image to build the image without cache, pulling latest base images.

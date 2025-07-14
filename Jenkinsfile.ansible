@@ -12,17 +12,36 @@ pipeline {
             }
         }
 
+        stage('Setup GCP Resources') {
+            steps {
+                script {
+                    // Run the Ansible playbook to set up GCP resources (e.g., Artifact Registry, Service Accounts)
+                    sh "ansible-playbook ansible/playbook/setup_gcp_resources.yml --extra-vars 'env=${params.ENV}'"
+                }
+            }
+        }
+
         stage('Run Ansible Playbook') {
             steps {
                 script {
                     def env = params.ENV
                     sh """
-                        # Run Ansible playbook to configure the environment
+                        # Run Ansible playbook to configure the environment and build Docker image
                         ansible-playbook ansible/deploy.yml --extra-vars "env=${env}"
                     """
                 }
             }
         }
+
+        stage('Decommission GCP Resources') {
+            steps {
+                script {
+                    // Decommission GCP resources (e.g., delete Artifact Registry, Service Accounts, etc.)
+                    sh "ansible-playbook ansible/playbook/decom_gcp_resources.yml --extra-vars 'env=${params.ENV}'"
+                }
+            }
+        }
+
 
         stage('Clean Up') {
             steps {

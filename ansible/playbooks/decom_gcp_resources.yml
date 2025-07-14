@@ -1,0 +1,78 @@
+---
+- name: Decommission GCP resources
+  hosts: localhost
+  gather_facts: no
+  vars:
+    gcp_project_id: "your-gcp-project-id"
+    artifact_registry_name: "my-etl-repo"
+    artifact_registry_location: "us-central1"
+    service_account_name: "etl-service-account"
+    gcs_bucket_name: "my-etl-bucket"
+    service_account_file: "/path/to/your/service/account/key.json"
+    gcp_region: "us-central1"  # Set the region as required
+    image_name: "my_etl_image"
+    image_tag: "latest"
+    secret_name: "my-etl-secret"  # Optional, if you used Secret Manager
+    database_name: "my-etl-db"  # Optional, if you used a database like Cloud SQL
+    network_name: "my-etl-network"  # Optional, if you have custom network resources
+
+  tasks:
+    - name: Delete Docker image from GCP Artifact Registry
+      gcp_artifact_registry:
+        name: "{{ artifact_registry_name }}"
+        location: "{{ artifact_registry_location }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Ensures the registry repository is removed
+
+    - name: Delete GCS bucket
+      gcp_storage_bucket:
+        name: "{{ gcs_bucket_name }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Deletes the GCS bucket
+
+    - name: Delete the Service Account
+      gcp_iam_service_account:
+        name: "{{ service_account_name }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Deletes the service account
+
+    - name: Remove IAM roles from the service account
+      gcp_iam_service_account_role:
+        service_account_email: "{{ service_account_name }}@{{ gcp_project_id }}.iam.gserviceaccount.com"
+        role: "{{ item }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Removes IAM roles
+      loop:
+        - "roles/artifactregistry.writer"
+        - "roles/storage.objectAdmin"
+        - "roles/storage.admin"
+
+    - name: Delete secret from GCP Secret Manager (if used)
+      gcp_secret_manager_secret:
+        name: "{{ secret_name }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Deletes the secret from Secret Manager
+
+    - name: Delete Cloud SQL database (if used)
+      gcp_sql_instance:
+        name: "{{ database_name }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Deletes the Cloud SQL database instance
+
+    - name: Delete VPC network (if used)
+      gcp_compute_network:
+        name: "{{ network_name }}"
+        project: "{{ gcp_project_id }}"
+        service_account_file: "{{ service_account_file }}"
+        state: absent  # Deletes the custom VPC network
+
+    - name: Clean up local environment (remove any remaining .env files, etc.)
+      file:
+        path: "/home/etl_user/.env"
+        state: absent  # Cleans up the local environment file if needed

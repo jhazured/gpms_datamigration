@@ -10,7 +10,7 @@ services:
     volumes:
       - ./notebooks:/home/jupyteruser/notebooks
     env_file:
-      - .env.dev
+      - env/.env.dev
     user: "${LOCAL_UID}:${LOCAL_GID}"
     command: ["sh", "-c", "jupyter lab --ip=0.0.0.0 --no-browser --NotebookApp.token='${JUPYTER_TOKEN}'"]
 
@@ -30,7 +30,7 @@ services:
   etl_test:
     build:
       context: .
-      dockerfile: docker/Dockerfile.dev-ubuntu
+      dockerfile: docker/Dockerfile.ubuntu
     image: gcp_etl_test:latest
     container_name: gcp_etl_test_runner
     volumes:
@@ -38,7 +38,7 @@ services:
     working_dir: /app
     command: ["pytest", "tests/", "--maxfail=3", "--disable-warnings", "-q"]
     env_file:
-      - .env.test
+      - env/.env.test
     user: "${LOCAL_UID}:${LOCAL_GID}"
 
 volumes:

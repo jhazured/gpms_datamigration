@@ -1,3 +1,18 @@
----
+# Ansible collections that are required for managing the tasks
 collections:
   - name: community.general
+    version: "2.0.0"  # specify the version you need (optional)
+
+  - name: google.cloud
+    version: ">=3.0"  # Required for GCP integrations
+
+# Optional if you use specific modules or tools
+  - name: google.cloud.gcp_secret_manager
+    version: ">=3.0" # For Secret Manager
+
+# Specify any additional collections if needed for other tasks:
+  # - name: ansible.builtin
+  # - name: community.docker
+
+# Python dependencies (if running Ansible with Python)
+# This is a good place to define Python dependencies for any local environment setup
