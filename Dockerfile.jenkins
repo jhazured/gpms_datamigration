@@ -1,62 +1,71 @@
-# Use slim Python base with 3.10
-FROM python:3.10-slim-bullseye
+# -------------------------------
+# 🟢 Builder stage
+# -------------------------------
+FROM python:3.10-slim-bullseye AS builder
 
-# Install Java for PySpark and required system tools
+# Install Java + build tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     openjdk-11-jre \
-    procps \
-    curl wget unzip git \
-    && rm -rf /var/lib/apt/lists/*
+    curl wget unzip git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set Java environment variables
+# Set Java env
 ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
-# ------------------------
 # Install Spark manually
-# ------------------------
 ENV SPARK_VERSION=3.5.1
 ENV HADOOP_VERSION=3
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$SPARK_HOME/bin:$PATH
 
-RUN wget https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+RUN wget --no-verbose https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
     tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz -C /opt && \
-    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} /opt/spark && \
+    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} ${SPARK_HOME} && \
     rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
 
-# ------------------------
-# PySpark needs absolute HOME for Ivy
-# ------------------------
-ENV HOME=/root
+# Upgrade pip & install dependencies
+WORKDIR /install
+COPY requirements/prod.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r prod.txt && \
+    pip install --no-cache-dir pytest
 
-# Add PYTHONPATH for local imports
-ENV PYTHONPATH=/app
+# -------------------------------
+# 🟢 Final runtime stage
+# -------------------------------
+FROM python:3.10-slim-bullseye
 
-# Set working directory for app code
+# Copy Java & Spark from builder
+COPY --from=builder /usr/lib/jvm /usr/lib/jvm
+COPY --from=builder /opt/spark /opt/spark
+
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$JAVA_HOME/bin:$SPARK_HOME/bin:$PATH
+
+# Create non-root user
+RUN useradd -ms /bin/bash etl_user
+
+# Set workdir
 WORKDIR /app
 
-# Copy requirements first (better Docker cache)
-COPY requirements/prod.txt .
+# Copy Python deps from builder
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r prod.txt
+# Copy the full app at once
+COPY . .
 
-# Install pytest explicitly for testing
-RUN pip install --no-cache-dir pytest
+# Make helper scripts executable
+RUN chmod +x scripts/tasks.sh scripts/run_pytest.sh scripts/run_bash.sh
 
-# Copy application code
-COPY framework/ framework/
-COPY etls/ etls/
+# Switch to non-root
+USER etl_user
 
-# Copy helper scripts
-COPY scripts/tasks.sh .
-COPY scripts/run_pytest.sh .
-COPY scripts/run_bash.sh .
-
-# (Optional) Expose Spark UI ports for debug
+# Expose Spark UI if needed
 EXPOSE 4040
 
-# Default command: run ETL main
+# Default command
 CMD ["python", "framework/main.py"]

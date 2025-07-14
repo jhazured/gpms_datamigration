@@ -1,0 +1,34 @@
+---
+- name: Build & push Docker image to GCP Artifact Registry
+  hosts: localhost
+  vars:
+    env: "prod"
+    project_id: "my-gcp-project"
+    region: "australia-southeast1"
+    repository: "my-repo"
+    image_name: "my_etl_image"
+
+  tasks:
+    - name: Build Docker image
+      community.general.docker_image:
+        name: "{{ image_name }}"
+        tag: "{{ env }}"
+        build:
+          path: "{{ playbook_dir }}/.."
+          dockerfile: >-
+            {{
+              'docker/Dockerfile.dev-ubuntu'
+              if env == 'dev' else
+              'Dockerfile.jenkins'
+            }}
+          pull: yes
+          nocache: yes
+
+    - name: Tag image for GCP Artifact Registry
+      ansible.builtin.command: >
+        docker tag {{ image_name }}:{{ env }}
+        {{ region }}-docker.pkg.dev/{{ project_id }}/{{ repository }}/{{ image_name }}:{{ env }}
+
+    - name: Push image to GCP Artifact Registry
+      ansible.builtin.command: >
+        docker push {{ region }}-docker.pkg.dev/{{ project_id }}/{{ repository }}/{{ image_name }}:{{ env }}

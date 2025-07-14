@@ -6,15 +6,43 @@
 set -e
 
 COMMAND=$1
-ENVIRONMENT=${2:-dev}  # Default to dev if not provided
+ENVIRONMENT=$2  # For build: dev | prod
 
 IMAGE_NAME=my_etl_image
+
+LOGS_DIR="logs"
+mkdir -p "$LOGS_DIR"
 
 case $COMMAND in
 
   build)
-    echo "Building Docker image for ENV: $ENVIRONMENT"
-    docker build -t ${IMAGE_NAME}:${ENVIRONMENT} .
+    echo "Building Docker image for ENV: '$ENVIRONMENT'"
+
+    if [ "$ENVIRONMENT" = "dev" ]; then
+      DOCKERFILE="docker/Dockerfile.dev-ubuntu"
+    elif [ "$ENVIRONMENT" = "prod" ]; then
+      DOCKERFILE="Dockerfile.jenkins"
+    else
+      echo "Invalid environment: $ENVIRONMENT"
+      exit 1
+    fi
+
+    LOG_FILE="${LOGS_DIR}/build_${ENVIRONMENT}_$(date +%Y%m%d_%H%M%S).log"
+    echo "Using Dockerfile: $DOCKERFILE"
+    echo "Logging build output to $LOG_FILE"
+
+    {
+      echo "[Build started at $(date)]"
+      docker build --no-cache -f "$DOCKERFILE" -t "${IMAGE_NAME}:${ENVIRONMENT}" .
+      echo "[Build completed at $(date)]"
+    } | tee "$LOG_FILE"
+
+    ;;
+
+  build_all)
+    echo "Rebuilding ALL environments WITHOUT cache..."
+    ./scripts/tasks.sh build dev
+    ./scripts/tasks.sh build prod
     ;;
 
   run)
@@ -55,11 +83,11 @@ case $COMMAND in
 
   clean)
     echo "Pruning dangling Docker images..."
-    docker image prune -f
+    docker system prune -a -f --volumes
     ;;
 
   *)
-    echo "Usage: $0 {build|run|jupyter|up|down|test|format|lint|clean} [ENV]"
+    echo "Usage: $0 {build|build_all|run|jupyter|up|down|test|format|lint|clean} [ENV]"
     exit 1
     ;;
 

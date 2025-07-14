@@ -1,0 +1,6 @@
+---
+env: "dev"
+project_id: "my-gcp-project"
+region: "australia-southeast1"
+repository: "my-repo"
+image_name: "my_etl_image"

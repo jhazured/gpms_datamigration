@@ -12,11 +12,7 @@ __pycache__/
 .env
 .env.*
 
-# Dockerfiles and Compose files (optional if not needed in image)
-Dockerfile*
-docker-compose.yml
-
-# Jupyter notebooks (optional)
+# Jupyter notebooks (optional, but only if you don't COPY or mount them)
 notebooks/
 
 # Logs and temp files
@@ -29,3 +25,8 @@ notebooks/
 .idea/
 *.swp
 *.swo
+
+# Additional
+*.egg-info/
+dist/
+build/

@@ -11,12 +11,13 @@ services:
       - ./notebooks:/home/jupyteruser/notebooks
     env_file:
       - .env.dev
-    user: "${UID}:${GID}"
+    user: "${LOCAL_UID}:${LOCAL_GID}"
+    command: ["sh", "-c", "jupyter lab --ip=0.0.0.0 --no-browser --NotebookApp.token='${JUPYTER_TOKEN}'"]
 
   etl_runner:
     build:
       context: .
-      dockerfile: Dockerfile.jenkins  # Adjust if you named it differently
+      dockerfile: Dockerfile.jenkins
     image: gcp_etl_runner:latest
     container_name: gcp_etl_runner
     volumes:
@@ -25,13 +26,14 @@ services:
       - .env.prod
     tty: true
     stdin_open: true
-    user: "${UID}:${GID}"
+    user: "${LOCAL_UID}:${LOCAL_GID}"  # Make sure your local UID:GID match your host user
+    working_dir: /app
 
   etl_test:
     build:
       context: .
-      dockerfile: docker/Dockerfile.dev-ubuntu  # Adjust if needed
-    image: gcp_etl_runner:latest
+      dockerfile: docker/Dockerfile.dev-ubuntu
+    image: gcp_etl_test:latest
     container_name: gcp_etl_test_runner
     volumes:
       - ./:/app
@@ -39,6 +41,7 @@ services:
     command: ["pytest", "tests/", "--maxfail=3", "--disable-warnings", "-q"]
     env_file:
       - .env.test
+    user: "${LOCAL_UID}:${LOCAL_GID}"
 
 volumes:
   gcp_datamigration:

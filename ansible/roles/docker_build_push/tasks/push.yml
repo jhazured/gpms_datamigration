@@ -1,0 +1,3 @@
+- name: Push image to GCP Artifact Registry
+  ansible.builtin.command: >
+    docker push {{ region }}-docker.pkg.dev/{{ project_id }}/{{ repository }}/{{ image_name }}:{{ env }}

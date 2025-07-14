@@ -1,0 +1,4 @@
+- name: Tag image for GCP Artifact Registry
+  ansible.builtin.command: >
+    docker tag {{ image_name }}:{{ env }}
+    {{ region }}-docker.pkg.dev/{{ project_id }}/{{ repository }}/{{ image_name }}:{{ env }}
