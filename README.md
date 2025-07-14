@@ -1,6 +1,6 @@
-# GPMS Data Migration
+# GCP Data Migration
 
-A modular ETL framework for migrating and reporting on GPMS data. Uses **YAML/Jinja** configurations, Python ETL modules, and Dockerized development and testing environments.
+A modular ETL framework for migrating Google Cloud Platform data. Uses **YAML/Jinja** configurations, Python ETL modules, and Dockerized development and testing environments.
 
 ---
 
