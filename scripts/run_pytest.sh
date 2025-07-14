@@ -4,7 +4,7 @@ ETL_NAME=$1
 
 echo "Running pytest tests inside Docker..."
 
-docker run --rm -v "$(pwd)":/app -w /app gpms_etl_runner:latest bash -c "\
+docker run --rm -v "$(pwd)":/app -w /app gcp_etl_runner:latest bash -c "\
   if [ -z \"$ETL_NAME\" ]; then \
     pytest tests/ --maxfail=3 --disable-warnings -q; \
   else \
