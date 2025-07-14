@@ -14,10 +14,10 @@ CONTAINER_NAME="local_test_container"
 
 # Run Docker container interactively with the given name
 docker run -it --name "$CONTAINER_NAME" \
-  -v gpms_datamigration:/home/etl_user/jobs-output \
+  -v gcp_datamigration:/home/etl_user/jobs-output \
   --user root \
-  --name gpms_etl_runner_bash \
-  gpms_etl_runner:latest \
+  --name gcp_etl_runner_bash \
+  gcp_etl_runner:latest \
   bash -c "
     # Create the data directory if it doesn't exist
     mkdir -p /home/etl_user/jobs-output/data && \
