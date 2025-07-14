@@ -1,0 +1,41 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'ENV', choices: ['dev', 'test', 'uat', 'prod'], description: 'Select environment for Ansible deployment')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Run Ansible Playbook') {
+            steps {
+                script {
+                    def env = params.ENV
+                    sh """
+                        # Run Ansible playbook to configure the environment
+                        ansible-playbook ansible/deploy.yml --extra-vars "env=${env}"
+                    """
+                }
+            }
+        }
+
+        stage('Clean Up') {
+            steps {
+                script {
+                    echo "Ansible playbook execution complete for ${params.ENV}"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Ansible Playbook Pipeline finished."
+        }
+    }
+}
