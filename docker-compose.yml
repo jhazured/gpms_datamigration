@@ -15,10 +15,8 @@ services:
     command: ["sh", "-c", "jupyter lab --ip=0.0.0.0 --no-browser --NotebookApp.token='${JUPYTER_TOKEN}'"]
 
   etl_runner:
-    build:
-      context: .
-      dockerfile: Dockerfile.jenkins
-    image: gcp_etl_runner:latest
+    # Remove build context, since the image will be pre-built via Ansible
+    image: gcp_etl_runner:latest  # Make sure to use the pre-built image from Ansible
     container_name: gcp_etl_runner
     volumes:
       - gcp_datamigration:/home/etl_user/jobs-output

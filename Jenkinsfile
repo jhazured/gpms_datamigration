@@ -16,11 +16,16 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build Docker Image with Ansible') {
             steps {
                 script {
-                    def tag = "my_etl_image:${params.ENV}"
-                    sh "docker build -t ${tag} ."
+                    def env = params.ENV
+                    sh """
+                        # Build Ansible container
+                        docker build -f docker/Dockerfile.ansible -t ansible-image .
+                        # Run the Ansible playbook to deploy
+                        docker run --rm -v \$(pwd):/workspace ansible-image ansible-playbook ansible/deploy.yml --extra-vars "env=${env}"
+                    """
                 }
             }
         }
