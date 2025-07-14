@@ -21,7 +21,7 @@ A modular ETL framework for migrating Google Cloud Platform data. Uses **YAML/Ji
 ## Setup
 
 ### 1. Clone the repo  
-git clone https://github.com/jhazured/gpms_datamigration.git  
+git clone https://github.com/jhazured/gcp_datamigration.git  
 cd gpms_datamigration
 
 ### 2. Build and run with Docker Compose  
