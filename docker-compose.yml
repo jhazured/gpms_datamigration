@@ -3,16 +3,158 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.ubuntu
+      target: test  # Multi-stage build target
+      args:
+        - BUILDKIT_INLINE_CACHE=1
     image: gcp_etl_test:latest
     container_name: gcp_etl_test_runner
     volumes:
       - ./:/app
-      - test_data:/app/data   # persistent volume for test outputs
+      - test_data:/app/data
+      - test_cache:/app/.pytest_cache  # Cache for faster subsequent runs
+      - /app/__pycache__  # Exclude from host mounting
     working_dir: /app
-    command: ["pytest", "tests/", "--maxfail=3", "--disable-warnings", "-q", "--junitxml=/app/data/test-results.xml"]
+    command: >
+      pytest tests/ 
+      --maxfail=3 
+      --disable-warnings 
+      -q 
+      --junitxml=/app/data/test-results.xml
+      --cov=framework 
+      --cov-report=html:/app/data/coverage
+      --cov-report=xml:/app/data/coverage.xml
+      -n auto
     env_file:
       - env/.env.test
-    user: "${LOCAL_UID}:${LOCAL_GID}"
+    environment:
+      - PYTHONPATH=/app
+      - PYTEST_CURRENT_TEST=${PYTEST_CURRENT_TEST:-}
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: "no"  # Don't restart test containers
+    networks:
+      - etl_test_network
+    depends_on:
+      - test_db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import framework; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    profiles:
+      - test
+      - ci
+
+  # Test database for integration tests
+  test_db:
+    image: postgres:13-alpine
+    container_name: etl_test_db
+    environment:
+      - POSTGRES_DB=test_etl
+      - POSTGRES_USER=test_user
+      - POSTGRES_PASSWORD=test_password
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - test_db_data:/var/lib/postgresql/data
+      - ./tests/fixtures/sql:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - etl_test_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d test_etl"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - test
+      - ci
+
+  # Development service for interactive testing
+  etl_dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ubuntu
+      target: dev
+    image: gcp_etl_dev:latest
+    container_name: gcp_etl_dev_runner
+    volumes:
+      - ./:/app
+      - dev_data:/app/data
+      - ~/.ssh:/home/devuser/.ssh:ro  # For git operations
+    working_dir: /app
+    command: ["tail", "-f", "/dev/null"]  # Keep container running
+    env_file:
+      - env/.env.dev
+    environment:
+      - PYTHONPATH=/app
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    networks:
+      - etl_test_network
+    depends_on:
+      - test_db
+    stdin_open: true
+    tty: true
+    profiles:
+      - dev
+
+  # Jupyter notebook for data exploration
+  jupyter:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ubuntu
+      target: jupyter
+    image: gcp_etl_jupyter:latest
+    container_name: gcp_etl_jupyter
+    volumes:
+      - ./:/app
+      - jupyter_data:/app/notebooks
+    working_dir: /app
+    command: >
+      jupyter lab 
+      --ip=0.0.0.0 
+      --port=8888 
+      --no-browser 
+      --allow-root
+      --NotebookApp.token=''
+      --NotebookApp.password=''
+    env_file:
+      - env/.env.dev
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - "8888:8888"
+    networks:
+      - etl_test_network
+    depends_on:
+      - test_db
+    profiles:
+      - dev
+      - jupyter
 
 volumes:
   test_data:
+    driver: local
+  test_cache:
+    driver: local
+  test_db_data:
+    driver: local
+  dev_data:
+    driver: local
+  jupyter_data:
+    driver: local
+
+networks:
+  etl_test_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

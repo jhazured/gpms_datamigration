@@ -2,85 +2,442 @@ pipeline {
     agent any
 
     parameters {
-        choice(name: 'ENV', choices: ['dev', 'test', 'uat', 'prod'], description: 'Select environment')
+        choice(
+            name: 'ENV',
+            choices: ['dev', 'test', 'uat', 'prod'],
+            description: 'Select target environment'
+        )
         choice(
             name: 'ACTION',
             choices: ['build_image', 'deploy_script', 'trigger_run', 'delete'],
             description: 'Select action to perform'
         )
-        choice(
+        activeChoice(
             name: 'ETL_SCRIPT',
-            choices: ['', 'customer_order_frequency', 'sales_etl', 'inventory_etl'],
-            description: 'Select ETL script (required for deploy, trigger, or delete)'
+            description: 'Select ETL script or group (required for deploy, trigger, or delete actions)',
+            filterable: true,
+            filterLength: 1,
+            choiceType: 'PT_SINGLE_SELECT',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: [
+                    classpath: [],
+                    sandbox: false,
+                    script: 'return ["ERROR: Failed to load ETL options"]'
+                ],
+                script: [
+                    classpath: [],
+                    sandbox: false,
+                    script: '''
+                        // Load ETL configuration
+                        def etlConfigScript = new File("${WORKSPACE}/jenkins/etl_groups.groovy").text
+                        def binding = new Binding()
+                        def shell = new GroovyShell(binding)
+                        return shell.evaluate(etlConfigScript)
+                    '''
+                ]
+            ]
         )
-        string(name: 'EXTRA_ARGS', defaultValue: '', description: 'Additional arguments to pass to the scripts')
+        string(
+            name: 'EXTRA_ARGS',
+            defaultValue: '',
+            description: 'Additional arguments to pass to the scripts'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'Perform a dry run without making actual changes'
+        )
+        booleanParam(
+            name: 'PARALLEL_EXECUTION',
+            defaultValue: false,
+            description: 'Execute ETL scripts in parallel (for groups only)'
+        )
+    }
+
+    environment {
+        DOCKER_REGISTRY = credentials('docker-registry-url')
+        GCP_SERVICE_ACCOUNT = credentials('gcp-service-account-key')
+        SCRIPT_TIMEOUT = '30m'
+        BUILD_TIMESTAMP = sh(returnStdout: true, script: 'date +%Y%m%d-%H%M%S').trim()
+    }
+
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        skipStagesAfterUnstable()
+        ansiColor('xterm')
     }
 
     stages {
-        stage('Validate Parameters') {
+        stage('Initialize') {
             steps {
                 script {
-                    echo "Validating parameters..."
-                    echo "ENV: ${params.ENV}"
-                    echo "ACTION: ${params.ACTION}"
-                    echo "ETL_SCRIPT: ${params.ETL_SCRIPT}"
-                    echo "EXTRA_ARGS: '${params.EXTRA_ARGS}'"
-
-                    if ((params.ACTION in ['deploy_script', 'trigger_run', 'delete']) && !params.ETL_SCRIPT?.trim()) {
-                        error("ETL_SCRIPT parameter is required when ACTION is 'deploy_script', 'trigger_run', or 'delete'")
-                    }
-
-                    echo "Parameter validation successful."
+                    echo "=== Pipeline Initialization ==="
+                    echo "Build ID: ${env.BUILD_ID}"
+                    echo "Build Number: ${env.BUILD_NUMBER}"
+                    echo "Build Timestamp: ${env.BUILD_TIMESTAMP}"
+                    echo "Job Name: ${env.JOB_NAME}"
+                    echo "Workspace: ${env.WORKSPACE}"
+                    
+                    // Set build display name
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.ENV} - ${params.ACTION}"
+                    currentBuild.description = "ENV: ${params.ENV}, ACTION: ${params.ACTION}" + 
+                                             (params.ETL_SCRIPT ? ", SCRIPT: ${params.ETL_SCRIPT}" : "")
                 }
             }
         }
 
-        stage('Perform Action') {
+        stage('Validate Parameters') {
             steps {
                 script {
-                    def extraArgs = params.EXTRA_ARGS?.trim() ? " ${params.EXTRA_ARGS}" : ""
-                    echo "Prepared extra arguments: '${extraArgs.trim()}'"
+                    echo "=== Parameter Validation ==="
+                    echo "Environment: ${params.ENV}"
+                    echo "Action: ${params.ACTION}"
+                    echo "ETL Script/Group: ${params.ETL_SCRIPT ?: 'Not specified'}"
+                    echo "Extra Args: '${params.EXTRA_ARGS}'"
+                    echo "Dry Run: ${params.DRY_RUN}"
+                    echo "Parallel Execution: ${params.PARALLEL_EXECUTION}"
 
-                    if (params.ACTION == 'build_image') {
-                        echo "Running build image commands..."
-                        sh """
-                            echo "Building Docker image for environment: ${params.ENV}"
-                            ./scripts/tasks.sh build ${params.ENV}${extraArgs}
-                            echo "Pushing Docker image for environment: ${params.ENV}"
-                            ./scripts/tasks.sh push ${params.ENV}${extraArgs}
-                        """
-                    } else if (params.ACTION == 'deploy_script') {
-                        echo "Running deploy ETL script commands..."
-                        sh """
-                            echo "Deploying ETL script '${params.ETL_SCRIPT}' to environment: ${params.ENV}"
-                            ./scripts/deploy_etl.sh --env ${params.ENV} --script ${params.ETL_SCRIPT}${extraArgs}
-                        """
-                    } else if (params.ACTION == 'trigger_run') {
-                        echo "Running trigger ETL job commands..."
-                        sh """
-                            echo "Triggering ETL run for script '${params.ETL_SCRIPT}' on environment: ${params.ENV}"
-                            ./scripts/trigger_gcp_run.sh --env ${params.ENV} --script ${params.ETL_SCRIPT}${extraArgs}
-                        """
-                    } else if (params.ACTION == 'delete') {
-                        echo "Running delete ETL script commands..."
-                        sh """
-                            echo "Deleting ETL artifacts for script '${params.ETL_SCRIPT}' on environment: ${params.ENV}"
-                            ./scripts/delete_etl.sh --env ${params.ENV} --script ${params.ETL_SCRIPT}${extraArgs}
-                        """
-                    } else {
-                        error("Unknown ACTION parameter value: ${params.ACTION}")
+                    // Load ETL configuration
+                    def etlConfigScript = readFile('jenkins/etl_groups.groovy')
+                    def binding = new Binding()
+                    def shell = new GroovyShell(binding)
+                    def ETLConfig = shell.evaluate(etlConfigScript + '\nreturn ETLConfig')
+                    
+                    // Store ETL config for later use
+                    env.ETL_CONFIG_LOADED = 'true'
+                    
+                    // Validate required parameters
+                    def actionsRequiringScript = ['deploy_script', 'trigger_run', 'delete']
+                    if (params.ACTION in actionsRequiringScript && !params.ETL_SCRIPT?.trim()) {
+                        error("ETL_SCRIPT parameter is required when ACTION is one of: ${actionsRequiringScript.join(', ')}")
                     }
+
+                    // Validate ETL script/group selection
+                    if (params.ETL_SCRIPT && !ETLConfig.isValidSelection(params.ETL_SCRIPT)) {
+                        error("Invalid ETL script/group selection: ${params.ETL_SCRIPT}")
+                    }
+                    
+                    // Get and display selection details
+                    if (params.ETL_SCRIPT) {
+                        def scripts = ETLConfig.getScripts(params.ETL_SCRIPT)
+                        def description = ETLConfig.getDescription(params.ETL_SCRIPT)
+                        
+                        echo "Selection Details: ${description}"
+                        echo "Scripts to process: ${scripts.join(', ')}"
+                        
+                        // Store scripts for later stages
+                        env.SCRIPTS_TO_PROCESS = scripts.join(',')
+                        env.IS_GROUP = params.ETL_SCRIPT.startsWith('GROUP:') ? 'true' : 'false'
+                    }
+
+                    // Validate environment-specific restrictions
+                    if (params.ENV == 'prod') {
+                        if (params.ACTION == 'delete') {
+                            error("Delete action is not allowed in production environment")
+                        }
+                        echo "WARNING: Operating in PRODUCTION environment. Proceed with caution."
+                    }
+                    
+                    // Validate parallel execution
+                    if (params.PARALLEL_EXECUTION && env.IS_GROUP != 'true') {
+                        echo "WARNING: Parallel execution is only applicable for groups. Ignoring parallel flag."
+                    }
+
+                    // Validate script files exist
+                    if (params.ETL_SCRIPT) {
+                        def scriptPaths = [
+                            "scripts/deploy_etl.sh",
+                            "scripts/trigger_gcp_run.sh",
+                            "scripts/delete_etl.sh"
+                        ]
+                        
+                        scriptPaths.each { scriptPath ->
+                            if (!fileExists(scriptPath)) {
+                                error("Required script not found: ${scriptPath}")
+                            }
+                        }
+                    }
+
+                    echo "✓ Parameter validation successful"
+                }
+            }
+        }
+
+        stage('Pre-execution Checks') {
+            steps {
+                script {
+                    echo "=== Pre-execution Checks ==="
+                    
+                    // Check script permissions
+                    sh '''
+                        echo "Checking script permissions..."
+                        find scripts/ -name "*.sh" -type f ! -executable -print0 | while IFS= read -r -d '' file; do
+                            echo "Making $file executable..."
+                            chmod +x "$file"
+                        done
+                    '''
+                    
+                    // Validate environment connectivity
+                    if (params.ACTION in ['deploy_script', 'trigger_run', 'delete']) {
+                        sh """
+                            echo "Testing connectivity to ${params.ENV} environment..."
+                            timeout 30 ./scripts/health_check.sh ${params.ENV} || {
+                                echo "WARNING: Health check failed for ${params.ENV} environment"
+                                echo "Proceeding with caution..."
+                            }
+                        """
+                    }
+                    
+                    echo "✓ Pre-execution checks completed"
+                }
+            }
+        }
+
+        stage('Execute Action') {
+            steps {
+                script {
+                    echo "=== Executing Action: ${params.ACTION} ==="
+                    
+                    def extraArgs = params.EXTRA_ARGS?.trim() ? " ${params.EXTRA_ARGS}" : ""
+                    def dryRunFlag = params.DRY_RUN ? " --dry-run" : ""
+                    
+                    echo "Prepared arguments: '${extraArgs.trim()}'"
+                    echo "Dry run mode: ${params.DRY_RUN}"
+
+                    try {
+                        switch (params.ACTION) {
+                            case 'build_image':
+                                executeBuildImage(extraArgs, dryRunFlag)
+                                break
+                            case 'deploy_script':
+                                executeDeployScript(extraArgs, dryRunFlag)
+                                break
+                            case 'trigger_run':
+                                executeTriggerRun(extraArgs, dryRunFlag)
+                                break
+                            case 'delete':
+                                executeDelete(extraArgs, dryRunFlag)
+                                break
+                            default:
+                                error("Unsupported ACTION: ${params.ACTION}")
+                        }
+                    } catch (Exception e) {
+                        error("Action execution failed: ${e.getMessage()}")
+                    }
+                }
+            }
+        }
+
+        stage('Post-execution Validation') {
+            when {
+                not { params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "=== Post-execution Validation ==="
+                    
+                    if (params.ACTION in ['deploy_script', 'trigger_run'] && params.ETL_SCRIPT) {
+                        def scripts = env.SCRIPTS_TO_PROCESS.split(',')
+                        
+                        scripts.each { script ->
+                            try {
+                                sh """
+                                    echo "Validating deployment/execution success for: ${script}"
+                                    timeout 60 ./scripts/validate_deployment.sh --env ${params.ENV} --script ${script} || {
+                                        echo "WARNING: Post-deployment validation failed for ${script}"
+                                        exit 1
+                                    }
+                                """
+                                echo "✓ Validation successful for: ${script}"
+                            } catch (Exception e) {
+                                echo "❌ Validation failed for: ${script}"
+                                if (env.IS_GROUP == 'true') {
+                                    currentBuild.result = 'UNSTABLE'
+                                } else {
+                                    throw e
+                                }
+                            }
+                        }
+                    }
+                    
+                    echo "✓ Post-execution validation completed"
                 }
             }
         }
     }
 
     post {
+        always {
+            script {
+                echo "=== Pipeline Cleanup ==="
+                
+                // Archive logs and artifacts
+                if (fileExists('logs/')) {
+                    archiveArtifacts artifacts: 'logs/**/*', allowEmptyArchive: true
+                }
+                
+                // Clean up temporary files
+                sh '''
+                    echo "Cleaning up temporary files..."
+                    find . -name "*.tmp" -type f -delete || true
+                    find . -name "*.log" -type f -older-than 7 -delete || true
+                '''
+            }
+        }
+        
         success {
-            echo 'Pipeline completed successfully.'
+            script {
+                echo "✅ Pipeline completed successfully"
+                echo "Action '${params.ACTION}' executed successfully for environment '${params.ENV}'"
+                
+                // Send success notification (customize as needed)
+                // slackSend(channel: '#deployments', color: 'good', 
+                //          message: "✅ ETL Pipeline SUCCESS: ${params.ACTION} completed for ${params.ENV}")
+            }
         }
+        
         failure {
-            echo 'Pipeline failed. Check the logs for details.'
+            script {
+                echo "❌ Pipeline failed"
+                echo "Action '${params.ACTION}' failed for environment '${params.ENV}'"
+                echo "Check the logs above for detailed error information"
+                
+                // Send failure notification (customize as needed)
+                // slackSend(channel: '#deployments', color: 'danger', 
+                //          message: "❌ ETL Pipeline FAILED: ${params.ACTION} failed for ${params.ENV}")
+            }
         }
+        
+        unstable {
+            echo "⚠️  Pipeline completed with warnings"
+        }
+        
+        aborted {
+            echo "🛑 Pipeline was aborted"
+        }
+    }
+}
+
+// Helper functions for different actions
+def executeBuildImage(extraArgs, dryRunFlag) {
+    echo "Building and pushing Docker image..."
+    sh """
+        echo "Building Docker image for environment: ${params.ENV}"
+        timeout ${env.SCRIPT_TIMEOUT} ./scripts/tasks.sh build ${params.ENV}${extraArgs}${dryRunFlag}
+        
+        echo "Pushing Docker image for environment: ${params.ENV}"
+        timeout ${env.SCRIPT_TIMEOUT} ./scripts/tasks.sh push ${params.ENV}${extraArgs}${dryRunFlag}
+    """
+}
+
+def executeDeployScript(extraArgs, dryRunFlag) {
+    echo "Deploying ETL script(s)..."
+    def scripts = env.SCRIPTS_TO_PROCESS.split(',')
+    
+    if (env.IS_GROUP == 'true' && params.PARALLEL_EXECUTION) {
+        executeScriptsInParallel(scripts, 'deploy', extraArgs, dryRunFlag)
+    } else {
+        executeScriptsSequentially(scripts, 'deploy', extraArgs, dryRunFlag)
+    }
+}
+
+def executeTriggerRun(extraArgs, dryRunFlag) {
+    echo "Triggering ETL job(s)..."
+    def scripts = env.SCRIPTS_TO_PROCESS.split(',')
+    
+    if (env.IS_GROUP == 'true' && params.PARALLEL_EXECUTION) {
+        executeScriptsInParallel(scripts, 'trigger', extraArgs, dryRunFlag)
+    } else {
+        executeScriptsSequentially(scripts, 'trigger', extraArgs, dryRunFlag)
+    }
+}
+
+def executeDelete(extraArgs, dryRunFlag) {
+    echo "Deleting ETL artifacts..."
+    
+    if (params.ENV == 'prod') {
+        error("Delete operations are not permitted in production environment")
+    }
+    
+    def scripts = env.SCRIPTS_TO_PROCESS.split(',')
+    
+    if (env.IS_GROUP == 'true' && params.PARALLEL_EXECUTION) {
+        executeScriptsInParallel(scripts, 'delete', extraArgs, dryRunFlag)
+    } else {
+        executeScriptsSequentially(scripts, 'delete', extraArgs, dryRunFlag)
+    }
+}
+
+def executeScriptsSequentially(scripts, action, extraArgs, dryRunFlag) {
+    echo "Executing ${scripts.size()} script(s) sequentially..."
+    
+    for (int i = 0; i < scripts.size(); i++) {
+        def script = scripts[i]
+        echo "Processing script ${i + 1}/${scripts.size()}: ${script}"
+        
+        try {
+            executeIndividualScript(script, action, extraArgs, dryRunFlag)
+            echo "✓ Successfully processed: ${script}"
+        } catch (Exception e) {
+            echo "❌ Failed to process: ${script}"
+            echo "Error: ${e.getMessage()}"
+            
+            // Decide whether to continue or fail
+            if (env.IS_GROUP == 'true') {
+                echo "Continuing with remaining scripts in group..."
+                currentBuild.result = 'UNSTABLE'
+            } else {
+                throw e
+            }
+        }
+    }
+}
+
+def executeScriptsInParallel(scripts, action, extraArgs, dryRunFlag) {
+    echo "Executing ${scripts.size()} script(s) in parallel..."
+    
+    def parallelTasks = [:]
+    
+    scripts.each { script ->
+        parallelTasks[script] = {
+            try {
+                executeIndividualScript(script, action, extraArgs, dryRunFlag)
+                echo "✓ Successfully processed: ${script}"
+            } catch (Exception e) {
+                echo "❌ Failed to process: ${script}"
+                echo "Error: ${e.getMessage()}"
+                currentBuild.result = 'UNSTABLE'
+                throw e
+            }
+        }
+    }
+    
+    parallel parallelTasks
+}
+
+def executeIndividualScript(script, action, extraArgs, dryRunFlag) {
+    switch (action) {
+        case 'deploy':
+            sh """
+                echo "Deploying ETL script '${script}' to environment: ${params.ENV}"
+                timeout ${env.SCRIPT_TIMEOUT} ./scripts/deploy_etl.sh --env ${params.ENV} --script ${script}${extraArgs}${dryRunFlag}
+            """
+            break
+        case 'trigger':
+            sh """
+                echo "Triggering ETL run for script '${script}' on environment: ${params.ENV}"
+                timeout ${env.SCRIPT_TIMEOUT} ./scripts/trigger_gcp_run.sh --env ${params.ENV} --script ${script}${extraArgs}${dryRunFlag}
+            """
+            break
+        case 'delete':
+            sh """
+                echo "Deleting ETL artifacts for script '${script}' on environment: ${params.ENV}"
+                timeout ${env.SCRIPT_TIMEOUT} ./scripts/delete_etl.sh --env ${params.ENV} --script ${script}${extraArgs}${dryRunFlag}
+            """
+            break
+        default:
+            error("Unknown action: ${action}")
     }
 }
