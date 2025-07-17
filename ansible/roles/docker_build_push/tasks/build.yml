@@ -7,8 +7,6 @@
       dockerfile: >-
         {{
           'docker/Dockerfile.ubuntu'
-          if env == 'dev' else
-          'docker/Dockerfile.jenkins'
         }}
       pull: yes
       nocache: yes
