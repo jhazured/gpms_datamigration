@@ -9,7 +9,7 @@ pipeline {
         )
         choice(
             name: 'ACTION',
-            choices: ['build_image', 'deploy_script', 'trigger_run', 'delete'],
+            choices: [ 'deploy_script', 'trigger_run', 'delete'],
             description: 'Select action to perform'
         )
         activeChoice(
@@ -63,7 +63,7 @@ pipeline {
     }
 
     options {
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 5, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         skipStagesAfterUnstable()
         ansiColor('xterm')
@@ -208,9 +208,6 @@ pipeline {
 
                     try {
                         switch (params.ACTION) {
-                            case 'build_image':
-                                executeBuildImage(extraArgs, dryRunFlag)
-                                break
                             case 'deploy_script':
                                 executeDeployScript(extraArgs, dryRunFlag)
                                 break
@@ -318,18 +315,6 @@ pipeline {
             echo "🛑 Pipeline was aborted"
         }
     }
-}
-
-// Helper functions for different actions
-def executeBuildImage(extraArgs, dryRunFlag) {
-    echo "Building and pushing Docker image..."
-    sh """
-        echo "Building Docker image for environment: ${params.ENV}"
-        timeout ${env.SCRIPT_TIMEOUT} ./scripts/tasks.sh build ${params.ENV}${extraArgs}${dryRunFlag}
-        
-        echo "Pushing Docker image for environment: ${params.ENV}"
-        timeout ${env.SCRIPT_TIMEOUT} ./scripts/tasks.sh push ${params.ENV}${extraArgs}${dryRunFlag}
-    """
 }
 
 def executeDeployScript(extraArgs, dryRunFlag) {
