@@ -1,0 +1,11 @@
+- name: Deploy Infra + Image
+  hosts: localhost
+  gather_facts: no
+  vars:
+    env: "{{ env | default('dev') }}"
+  tasks:
+    - name: Setup GCP Resources
+      include_tasks: playbook/setup_gcp_resources.yml
+
+    - name: Build and Push Docker Image
+      include_tasks: playbook/build_push_image.yml
