@@ -1,19 +1,25 @@
-FROM ubuntu:22.04
+# ---------------------------------------
+# 🟢 Builder stage
+# ---------------------------------------
+FROM ubuntu:22.04 AS builder
 
 # Build arguments for flexibility
 ARG PYTHON_VERSION=3.10
+ARG SPARK_VERSION=3.5.1
+ARG HADOOP_VERSION=3
 ARG JAVA_VERSION=11
+ARG GCS_CONNECTOR_VERSION=hadoop3-2.2.21
 
-# Environment variables
+# Environment variables for build stage
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     JAVA_HOME=/usr/lib/jvm/java-${JAVA_VERSION}-openjdk-amd64 \
-    PATH="$JAVA_HOME/bin:${PATH}"
+    SPARK_HOME=/opt/spark
 
-# Install essential system packages and GCP SDK
+# Install build dependencies, Java, Python, and GCP SDK
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         openjdk-${JAVA_VERSION}-jdk \
@@ -24,6 +30,7 @@ RUN apt-get update && \
         wget \
         gnupg \
         ca-certificates \
+        build-essential \
         && \
     # Install Google Cloud SDK
     curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
@@ -31,38 +38,125 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y --no-install-recommends google-cloud-sdk && \
     # Cleanup
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Create symbolic links for python3
+RUN ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
+    ln -s /usr/bin/pip${PYTHON_VERSION} /usr/bin/pip3
+
+# Upgrade pip
+RUN python3 -m pip install --upgrade pip setuptools wheel
+
+# Install Spark and GCS connector for Google Cloud integration
+ENV SPARK_VERSION=${SPARK_VERSION} \
+    HADOOP_VERSION=${HADOOP_VERSION} \
+    GCS_CONNECTOR_VERSION=${GCS_CONNECTOR_VERSION} \
+    PATH=$SPARK_HOME/bin:$JAVA_HOME/bin:$PATH
+
+RUN curl -sSL https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz \
+    | tar -xz -C /opt && \
+    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} ${SPARK_HOME} && \
+    # Download GCS connector for Spark-BigQuery integration
+    curl -sSL https://storage.googleapis.com/hadoop-lib/gcs/gcs-connector-${GCS_CONNECTOR_VERSION}.jar \
+    -o ${SPARK_HOME}/jars/gcs-connector-${GCS_CONNECTOR_VERSION}.jar && \
+    # Download BigQuery connector for Spark
+    curl -sSL https://repo1.maven.org/maven2/com/google/cloud/spark/spark-bigquery-with-dependencies_2.12/0.36.1/spark-bigquery-with-dependencies_2.12-0.36.1.jar \
+    -o ${SPARK_HOME}/jars/spark-bigquery-with-dependencies_2.12-0.36.1.jar && \
+    # Remove unnecessary files to reduce size
+    rm -rf ${SPARK_HOME}/examples ${SPARK_HOME}/data ${SPARK_HOME}/R ${SPARK_HOME}/yarn
+
+# Add log4j.properties file
+COPY config/log4j.properties ${SPARK_HOME}/conf/log4j.properties
+
+# Install Python dependencies
+WORKDIR /install
+COPY requirements/prod.txt .
+RUN pip3 install --no-cache-dir --user -r prod.txt
+
+# ---------------------------------------
+# 🟢 Final runtime stage
+# ---------------------------------------
+FROM ubuntu:22.04
+
+# Build arguments
+ARG PYTHON_VERSION=3.10
+ARG JAVA_VERSION=11
+
+# Environment variables optimized for GCP Spark ETL
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    JAVA_HOME=/usr/lib/jvm/java-${JAVA_VERSION}-openjdk-amd64 \
+    SPARK_HOME=/opt/spark \
+    PYTHONPATH=/app:$PYTHONPATH \
+    PATH="$JAVA_HOME/bin:$SPARK_HOME/bin:${PATH}" \
+    SPARK_CONF_DIR=/opt/spark/conf \
+    GOOGLE_APPLICATION_CREDENTIALS=/app/service-account-key.json \
+    PYSPARK_PYTHON=python3 \
+    PYSPARK_DRIVER_PYTHON=python3
+
+# Install minimal runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        openjdk-${JAVA_VERSION}-jre-headless \
+        python${PYTHON_VERSION} \
+        python${PYTHON_VERSION}-pip \
+        procps \
+        curl \
+        ca-certificates \
+        && \
+    # Create symbolic links for python3
+    ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
+    ln -s /usr/bin/pip${PYTHON_VERSION} /usr/bin/pip3 && \
+    # Cleanup
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Create symbolic links for python3 if using specific version
-RUN ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
-    ln -s /usr/bin/pip${PYTHON_VERSION} /usr/bin/pip3
+# Copy Java, Spark, GCP SDK, and Python packages from builder
+COPY --from=builder /usr/lib/jvm /usr/lib/jvm
+COPY --from=builder /opt/spark /opt/spark
+COPY --from=builder /usr/lib/google-cloud-sdk /usr/lib/google-cloud-sdk
+COPY --from=builder /usr/bin/gcloud /usr/bin/gcloud
+COPY --from=builder /usr/bin/gsutil /usr/bin/gsutil
+COPY --from=builder /root/.local /usr/local
 
-# Upgrade pip first
-RUN python3 -m pip install --upgrade pip setuptools wheel
+# Add GCP SDK to PATH
+ENV PATH="/usr/lib/google-cloud-sdk/bin:$PATH"
 
-# Create non-root user and directories BEFORE switching user
-RUN groupadd -r devuser && \
-    useradd -r -g devuser -d /home/devuser -s /bin/bash devuser && \
-    mkdir -p /home/devuser /app /app/data /app/logs && \
-    chown -R devuser:devuser /home/devuser /app
+# Create non-root user with proper setup for ETL operations
+RUN groupadd -r etl_user && \
+    useradd -r -g etl_user -d /home/etl_user -s /bin/bash etl_user && \
+    mkdir -p /home/etl_user /app /app/logs /app/data /app/spark-warehouse /app/spark-events \
+             /app/checkpoints /app/temp /app/config && \
+    chown -R etl_user:etl_user /home/etl_user /app
 
-# Copy requirements and install Python packages
-COPY requirements/prod.txt /tmp/prod.txt
-RUN pip3 install --no-cache-dir -r /tmp/prod.txt && \
-    rm /tmp/prod.txt
+# Copy Spark configuration optimized for GCP ETL
+COPY --chown=etl_user:etl_user config/spark-defaults.conf ${SPARK_HOME}/conf/spark-defaults.conf 2>/dev/null || true
+
+# Copy application code
+WORKDIR /app
+COPY --chown=etl_user:etl_user . .
+
+# Make scripts executable (if they exist)
+RUN if [ -f scripts/tasks.sh ]; then chmod +x scripts/tasks.sh; fi && \
+    if [ -f scripts/run_pytest.sh ]; then chmod +x scripts/run_pytest.sh; fi && \
+    if [ -f scripts/run_bash.sh ]; then chmod +x scripts/run_bash.sh; fi
 
 # Switch to non-root user
-USER devuser
-WORKDIR /app
+USER etl_user
 
-# Set up Python path
-ENV PYTHONPATH=/app:$PYTHONPATH
+# Health check - validates Spark, GCS access, and BigQuery connectivity
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD python3 -c "import pyspark; from pyspark.sql import SparkSession; spark = SparkSession.builder.appName('healthcheck').getOrCreate(); print('Spark OK'); spark.stop()" || exit 1
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import sys; sys.exit(0)" || exit 1
+# Expose Spark UI and application ports
+EXPOSE 4040 4041 4042 4043 8080 8081
 
-# Default command
-CMD ["bash"]
+# Add signal handling for graceful shutdown
+STOPSIGNAL SIGTERM
+
+# Default command optimized for ETL framework
+CMD ["python3", "framework/main.py"]

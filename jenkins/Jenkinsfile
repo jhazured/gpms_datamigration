@@ -1,428 +1,302 @@
 pipeline {
     agent any
-
+    
     parameters {
         choice(
-            name: 'ENV',
-            choices: ['dev', 'test', 'uat', 'prod'],
-            description: 'Select target environment'
+            name: 'stack_action',
+            choices: [
+                'init',
+                'deploy-single-glue-job',
+                'bulk-deploy-glue-job',
+                'deploy-playbook',
+                'delete-single-glue-job'
+            ],
+            description: 'Select the deployment action to perform'
         )
         choice(
-            name: 'ACTION',
-            choices: [ 'deploy_script', 'trigger_run', 'delete'],
-            description: 'Select action to perform'
+            name: 'environment',
+            choices: ['dev', 'test', 'uat', 'prod'],
+            description: 'Target environment for deployment'
         )
-        activeChoice(
-            name: 'ETL_SCRIPT',
-            description: 'Select ETL script or group (required for deploy, trigger, or delete actions)',
-            filterable: true,
-            filterLength: 1,
-            choiceType: 'PT_SINGLE_SELECT',
-            script: [
-                $class: 'GroovyScript',
-                fallbackScript: [
-                    classpath: [],
-                    sandbox: false,
-                    script: 'return ["ERROR: Failed to load ETL options"]'
-                ],
-                script: [
-                    classpath: [],
-                    sandbox: false,
-                    script: '''
-                        // Load ETL configuration
-                        def etlConfigScript = new File("${WORKSPACE}/jenkins/etl_groups.groovy").text
-                        def binding = new Binding()
-                        def shell = new GroovyShell(binding)
-                        return shell.evaluate(etlConfigScript)
-                    '''
-                ]
-            ]
+        choice(
+            name: 'etl_obj',
+            choices: getEtlChoices(),
+            description: 'Select ETL object (used for single deployments)'
         )
         string(
-            name: 'EXTRA_ARGS',
+            name: 'custom_playbook',
             defaultValue: '',
-            description: 'Additional arguments to pass to the scripts'
+            description: 'Custom playbook name for playbook deployments'
         )
         booleanParam(
-            name: 'DRY_RUN',
+            name: 'skip_tests',
             defaultValue: false,
-            description: 'Perform a dry run without making actual changes'
-        )
-        booleanParam(
-            name: 'PARALLEL_EXECUTION',
-            defaultValue: false,
-            description: 'Execute ETL scripts in parallel (for groups only)'
+            description: 'Skip running tests during deployment'
         )
     }
-
+    
     environment {
-        DOCKER_REGISTRY = credentials('docker-registry-url')
-        GCP_SERVICE_ACCOUNT = credentials('gcp-service-account-key')
-        SCRIPT_TIMEOUT = '30m'
-        BUILD_TIMESTAMP = sh(returnStdout: true, script: 'date +%Y%m%d-%H%M%S').trim()
+        DOCKER_IMAGE = "gpms_deploy_prep"
+        DOCKER_TAG = "${BUILD_NUMBER}"
+        WORKSPACE_DIR = "${WORKSPACE}"
+        ANSIBLE_CONFIG = "${WORKSPACE}/ansible/ansible.cfg"
+        PYTHONPATH = "${WORKSPACE}"
     }
-
-    options {
-        timeout(time: 5, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        skipStagesAfterUnstable()
-        ansiColor('xterm')
-    }
-
+    
     stages {
         stage('Initialize') {
             steps {
                 script {
-                    echo "=== Pipeline Initialization ==="
-                    echo "Build ID: ${env.BUILD_ID}"
-                    echo "Build Number: ${env.BUILD_NUMBER}"
-                    echo "Build Timestamp: ${env.BUILD_TIMESTAMP}"
-                    echo "Job Name: ${env.JOB_NAME}"
-                    echo "Workspace: ${env.WORKSPACE}"
-                    
-                    // Set build display name
-                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.ENV} - ${params.ACTION}"
-                    currentBuild.description = "ENV: ${params.ENV}, ACTION: ${params.ACTION}" + 
-                                             (params.ETL_SCRIPT ? ", SCRIPT: ${params.ETL_SCRIPT}" : "")
+                    echo "Starting GPMS Deployment Pipeline"
+                    echo "Stack Action: ${params.stack_action}"
+                    echo "Environment: ${params.environment}"
+                    echo "Build Number: ${BUILD_NUMBER}"
                 }
             }
         }
-
-        stage('Validate Parameters') {
+        
+        stage('Clean Workspace & Checkout') {
+            steps {
+                cleanWs()
+                checkout scm
+            }
+        }
+        
+        stage('Build Docker Image') {
             steps {
                 script {
-                    echo "=== Parameter Validation ==="
-                    echo "Environment: ${params.ENV}"
-                    echo "Action: ${params.ACTION}"
-                    echo "ETL Script/Group: ${params.ETL_SCRIPT ?: 'Not specified'}"
-                    echo "Extra Args: '${params.EXTRA_ARGS}'"
-                    echo "Dry Run: ${params.DRY_RUN}"
-                    echo "Parallel Execution: ${params.PARALLEL_EXECUTION}"
-
-                    // Load ETL configuration
-                    def etlConfigScript = readFile('jenkins/etl_groups.groovy')
-                    def binding = new Binding()
-                    def shell = new GroovyShell(binding)
-                    def ETLConfig = shell.evaluate(etlConfigScript + '\nreturn ETLConfig')
-                    
-                    // Store ETL config for later use
-                    env.ETL_CONFIG_LOADED = 'true'
-                    
-                    // Validate required parameters
-                    def actionsRequiringScript = ['deploy_script', 'trigger_run', 'delete']
-                    if (params.ACTION in actionsRequiringScript && !params.ETL_SCRIPT?.trim()) {
-                        error("ETL_SCRIPT parameter is required when ACTION is one of: ${actionsRequiringScript.join(', ')}")
-                    }
-
-                    // Validate ETL script/group selection
-                    if (params.ETL_SCRIPT && !ETLConfig.isValidSelection(params.ETL_SCRIPT)) {
-                        error("Invalid ETL script/group selection: ${params.ETL_SCRIPT}")
-                    }
-                    
-                    // Get and display selection details
-                    if (params.ETL_SCRIPT) {
-                        def scripts = ETLConfig.getScripts(params.ETL_SCRIPT)
-                        def description = ETLConfig.getDescription(params.ETL_SCRIPT)
-                        
-                        echo "Selection Details: ${description}"
-                        echo "Scripts to process: ${scripts.join(', ')}"
-                        
-                        // Store scripts for later stages
-                        env.SCRIPTS_TO_PROCESS = scripts.join(',')
-                        env.IS_GROUP = params.ETL_SCRIPT.startsWith('GROUP:') ? 'true' : 'false'
-                    }
-
-                    // Validate environment-specific restrictions
-                    if (params.ENV == 'prod') {
-                        if (params.ACTION == 'delete') {
-                            error("Delete action is not allowed in production environment")
-                        }
-                        echo "WARNING: Operating in PRODUCTION environment. Proceed with caution."
-                    }
-                    
-                    // Validate parallel execution
-                    if (params.PARALLEL_EXECUTION && env.IS_GROUP != 'true') {
-                        echo "WARNING: Parallel execution is only applicable for groups. Ignoring parallel flag."
-                    }
-
-                    // Validate script files exist
-                    if (params.ETL_SCRIPT) {
-                        def scriptPaths = [
-                            "scripts/deploy_etl.sh",
-                            "scripts/trigger_gcp_run.sh",
-                            "scripts/delete_etl.sh"
-                        ]
-                        
-                        scriptPaths.each { scriptPath ->
-                            if (!fileExists(scriptPath)) {
-                                error("Required script not found: ${scriptPath}")
-                            }
-                        }
-                    }
-
-                    echo "✓ Parameter validation successful"
+                    echo "Building Docker image for deployment preparation"
+                    sh """
+                        docker build -f docker/Dockerfile.ansible \
+                            -t ${DOCKER_IMAGE}:${DOCKER_TAG} \
+                            -t ${DOCKER_IMAGE}:latest .
+                    """
                 }
             }
         }
-
-        stage('Pre-execution Checks') {
-            steps {
-                script {
-                    echo "=== Pre-execution Checks ==="
-                    
-                    // Check script permissions
-                    sh '''
-                        echo "Checking script permissions..."
-                        find scripts/ -name "*.sh" -type f ! -executable -print0 | while IFS= read -r -d '' file; do
-                            echo "Making $file executable..."
-                            chmod +x "$file"
-                        done
-                    '''
-                    
-                    // Validate environment connectivity
-                    if (params.ACTION in ['deploy_script', 'trigger_run', 'delete']) {
-                        sh """
-                            echo "Testing connectivity to ${params.ENV} environment..."
-                            timeout 30 ./scripts/health_check.sh ${params.ENV} || {
-                                echo "WARNING: Health check failed for ${params.ENV} environment"
-                                echo "Proceeding with caution..."
-                            }
-                        """
-                    }
-                    
-                    echo "✓ Pre-execution checks completed"
-                }
-            }
-        }
-
-        stage('Execute Action') {
-            steps {
-                script {
-                    echo "=== Executing Action: ${params.ACTION} ==="
-                    
-                    def extraArgs = params.EXTRA_ARGS?.trim() ? " ${params.EXTRA_ARGS}" : ""
-                    def dryRunFlag = params.DRY_RUN ? " --dry-run" : ""
-                    
-                    echo "Prepared arguments: '${extraArgs.trim()}'"
-                    echo "Dry run mode: ${params.DRY_RUN}"
-
-                    try {
-                        switch (params.ACTION) {
-                            case 'deploy_script':
-                                executeDeployScript(extraArgs, dryRunFlag)
-                                break
-                            case 'trigger_run':
-                                executeTriggerRun(extraArgs, dryRunFlag)
-                                break
-                            case 'delete':
-                                executeDelete(extraArgs, dryRunFlag)
-                                break
-                            default:
-                                error("Unsupported ACTION: ${params.ACTION}")
-                        }
-                    } catch (Exception e) {
-                        error("Action execution failed: ${e.getMessage()}")
-                    }
-                }
-            }
-        }
-
-        stage('Post-execution Validation') {
+        
+        stage('Run Tests') {
             when {
-                not { params.DRY_RUN }
+                not { params.skip_tests }
             }
             steps {
                 script {
-                    echo "=== Post-execution Validation ==="
-                    
-                    if (params.ACTION in ['deploy_script', 'trigger_run'] && params.ETL_SCRIPT) {
-                        def scripts = env.SCRIPTS_TO_PROCESS.split(',')
-                        
-                        scripts.each { script ->
-                            try {
-                                sh """
-                                    echo "Validating deployment/execution success for: ${script}"
-                                    timeout 60 ./scripts/validate_deployment.sh --env ${params.ENV} --script ${script} || {
-                                        echo "WARNING: Post-deployment validation failed for ${script}"
-                                        exit 1
-                                    }
-                                """
-                                echo "✓ Validation successful for: ${script}"
-                            } catch (Exception e) {
-                                echo "❌ Validation failed for: ${script}"
-                                if (env.IS_GROUP == 'true') {
-                                    currentBuild.result = 'UNSTABLE'
-                                } else {
-                                    throw e
-                                }
-                            }
-                        }
-                    }
-                    
-                    echo "✓ Post-execution validation completed"
+                    echo "Running ETL framework tests"
+                    sh """
+                        chmod +x scripts/run_pytest.sh
+                        ./scripts/run_pytest.sh
+                    """
+                }
+            }
+        }
+        
+        stage('Deployment Preparation') {
+            when {
+                anyOf {
+                    expression { params.stack_action == 'init' }
+                    expression { params.stack_action == 'deploy-single-glue-job' }
+                    expression { params.stack_action == 'bulk-deploy-glue-job' }
+                    expression { params.stack_action == 'deploy-playbook' }
+                }
+            }
+            steps {
+                script {
+                    runDeployPrep()
+                }
+            }
+        }
+        
+        stage('Compile Python Wheels') {
+            when {
+                expression { params.stack_action == 'deploy-playbook' }
+            }
+            steps {
+                script {
+                    echo "Compiling Python wheels for playbook deployment"
+                    sh """
+                        mkdir -p wheels/custom
+                        pip wheel -r requirements/${params.environment}.txt -w wheels/custom/
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy Single Glue Job') {
+            when {
+                expression { params.stack_action == 'deploy-single-glue-job' }
+            }
+            steps {
+                script {
+                    echo "Deploying single ETL job: ${params.etl_obj}"
+                    runPlaybook("deploy.yml", [
+                        "etl_obj": params.etl_obj,
+                        "environment": params.environment,
+                        "action": "deploy"
+                    ])
+                }
+            }
+        }
+        
+        stage('Bulk Deploy Glue Jobs') {
+            when {
+                expression { params.stack_action == 'bulk-deploy-glue-job' }
+            }
+            steps {
+                script {
+                    echo "Bulk deploying all ETL jobs"
+                    runPlaybook("deploy.yml", [
+                        "environment": params.environment,
+                        "action": "bulk_deploy"
+                    ])
+                }
+            }
+        }
+        
+        stage('Deploy Playbook') {
+            when {
+                expression { params.stack_action == 'deploy-playbook' }
+            }
+            steps {
+                script {
+                    def playbook = params.custom_playbook ?: "deploy.yml"
+                    echo "Running custom playbook deployment: ${playbook}"
+                    runPlaybook(playbook, [
+                        "environment": params.environment,
+                        "action": "playbook_deploy"
+                    ])
+                }
+            }
+        }
+        
+        stage('Delete Single Glue Job') {
+            when {
+                expression { params.stack_action == 'delete-single-glue-job' }
+            }
+            steps {
+                script {
+                    echo "Deleting ETL job: ${params.etl_obj}"
+                    runPlaybook("deploy.yml", [
+                        "etl_obj": params.etl_obj,
+                        "environment": params.environment,
+                        "action": "delete"
+                    ])
                 }
             }
         }
     }
-
+    
     post {
         always {
             script {
-                echo "=== Pipeline Cleanup ==="
-                
-                // Archive logs and artifacts
-                if (fileExists('logs/')) {
-                    archiveArtifacts artifacts: 'logs/**/*', allowEmptyArchive: true
-                }
-                
-                // Clean up temporary files
-                sh '''
-                    echo "Cleaning up temporary files..."
-                    find . -name "*.tmp" -type f -delete || true
-                    find . -name "*.log" -type f -older-than 7 -delete || true
-                '''
+                echo "Cleaning up Docker containers and images"
+                sh """
+                    # Stop and remove containers
+                    docker ps -a -q --filter ancestor=${DOCKER_IMAGE}:${DOCKER_TAG} | xargs -r docker stop
+                    docker ps -a -q --filter ancestor=${DOCKER_IMAGE}:${DOCKER_TAG} | xargs -r docker rm
+                    
+                    # Clean up build artifacts
+                    docker system prune -f
+                """
             }
-        }
-        
-        success {
-            script {
-                echo "✅ Pipeline completed successfully"
-                echo "Action '${params.ACTION}' executed successfully for environment '${params.ENV}'"
-                
-                // Send success notification (customize as needed)
-                // slackSend(channel: '#deployments', color: 'good', 
-                //          message: "✅ ETL Pipeline SUCCESS: ${params.ACTION} completed for ${params.ENV}")
-            }
-        }
-        
-        failure {
-            script {
-                echo "❌ Pipeline failed"
-                echo "Action '${params.ACTION}' failed for environment '${params.ENV}'"
-                echo "Check the logs above for detailed error information"
-                
-                // Send failure notification (customize as needed)
-                // slackSend(channel: '#deployments', color: 'danger', 
-                //          message: "❌ ETL Pipeline FAILED: ${params.ACTION} failed for ${params.ENV}")
-            }
-        }
-        
-        unstable {
-            echo "⚠️  Pipeline completed with warnings"
-        }
-        
-        aborted {
-            echo "🛑 Pipeline was aborted"
-        }
-    }
-}
-
-def executeDeployScript(extraArgs, dryRunFlag) {
-    echo "Deploying ETL script(s)..."
-    def scripts = env.SCRIPTS_TO_PROCESS.split(',')
-    
-    if (env.IS_GROUP == 'true' && params.PARALLEL_EXECUTION) {
-        executeScriptsInParallel(scripts, 'deploy', extraArgs, dryRunFlag)
-    } else {
-        executeScriptsSequentially(scripts, 'deploy', extraArgs, dryRunFlag)
-    }
-}
-
-def executeTriggerRun(extraArgs, dryRunFlag) {
-    echo "Triggering ETL job(s)..."
-    def scripts = env.SCRIPTS_TO_PROCESS.split(',')
-    
-    if (env.IS_GROUP == 'true' && params.PARALLEL_EXECUTION) {
-        executeScriptsInParallel(scripts, 'trigger', extraArgs, dryRunFlag)
-    } else {
-        executeScriptsSequentially(scripts, 'trigger', extraArgs, dryRunFlag)
-    }
-}
-
-def executeDelete(extraArgs, dryRunFlag) {
-    echo "Deleting ETL artifacts..."
-    
-    if (params.ENV == 'prod') {
-        error("Delete operations are not permitted in production environment")
-    }
-    
-    def scripts = env.SCRIPTS_TO_PROCESS.split(',')
-    
-    if (env.IS_GROUP == 'true' && params.PARALLEL_EXECUTION) {
-        executeScriptsInParallel(scripts, 'delete', extraArgs, dryRunFlag)
-    } else {
-        executeScriptsSequentially(scripts, 'delete', extraArgs, dryRunFlag)
-    }
-}
-
-def executeScriptsSequentially(scripts, action, extraArgs, dryRunFlag) {
-    echo "Executing ${scripts.size()} script(s) sequentially..."
-    
-    for (int i = 0; i < scripts.size(); i++) {
-        def script = scripts[i]
-        echo "Processing script ${i + 1}/${scripts.size()}: ${script}"
-        
-        try {
-            executeIndividualScript(script, action, extraArgs, dryRunFlag)
-            echo "✓ Successfully processed: ${script}"
-        } catch (Exception e) {
-            echo "❌ Failed to process: ${script}"
-            echo "Error: ${e.getMessage()}"
             
-            // Decide whether to continue or fail
-            if (env.IS_GROUP == 'true') {
-                echo "Continuing with remaining scripts in group..."
-                currentBuild.result = 'UNSTABLE'
-            } else {
-                throw e
-            }
+            // Archive logs and artifacts
+            archiveArtifacts artifacts: 'logs/**/*', allowEmptyArchive: true
+            
+            // Publish test results if they exist
+            publishTestResults testResultsPattern: 'tests/reports/*.xml'
+        }
+        success {
+            echo "GPMS Deployment Pipeline completed successfully!"
+        }
+        failure {
+            echo "GPMS Deployment Pipeline failed. Check logs for details."
+            // Send notification (email, Slack, etc.)
         }
     }
 }
 
-def executeScriptsInParallel(scripts, action, extraArgs, dryRunFlag) {
-    echo "Executing ${scripts.size()} script(s) in parallel..."
-    
-    def parallelTasks = [:]
-    
-    scripts.each { script ->
-        parallelTasks[script] = {
-            try {
-                executeIndividualScript(script, action, extraArgs, dryRunFlag)
-                echo "✓ Successfully processed: ${script}"
-            } catch (Exception e) {
-                echo "❌ Failed to process: ${script}"
-                echo "Error: ${e.getMessage()}"
-                currentBuild.result = 'UNSTABLE'
-                throw e
+// Helper function to get ETL choices from groovy file
+def getEtlChoices() {
+    try {
+        // Load ETL groups configuration
+        def etlGroups = load "jenkins/etl_groups.groovy"
+        
+        // Extract ETL object names from the configuration
+        if (etlGroups && etlGroups.etl_objects) {
+            return etlGroups.etl_objects.collect { it.name }
+        } else if (etlGroups && etlGroups.getEtlObjects) {
+            return etlGroups.getEtlObjects()
+        } else {
+            // Fallback to scanning etls directory
+            def etlFiles = []
+            def etlDir = new File("etls")
+            if (etlDir.exists()) {
+                etlDir.listFiles().each { file ->
+                    if (file.name.endsWith('.yaml.j2')) {
+                        etlFiles.add(file.name.replace('.yaml.j2', ''))
+                    }
+                }
             }
+            return etlFiles ?: ['customer_order_frequency', 'customer_sales_summary', 'product_inventory_report', 'product_sales_summary']
         }
+    } catch (Exception e) {
+        echo "Warning: Could not load ETL choices from groovy file: ${e.message}"
+        // Fallback choices
+        return [
+            'customer_order_frequency',
+            'customer_sales_summary', 
+            'product_inventory_report',
+            'product_sales_summary'
+        ]
     }
-    
-    parallel parallelTasks
 }
 
-def executeIndividualScript(script, action, extraArgs, dryRunFlag) {
-    switch (action) {
-        case 'deploy':
-            sh """
-                echo "Deploying ETL script '${script}' to environment: ${params.ENV}"
-                timeout ${env.SCRIPT_TIMEOUT} ./scripts/deploy_etl.sh --env ${params.ENV} --script ${script}${extraArgs}${dryRunFlag}
-            """
-            break
-        case 'trigger':
-            sh """
-                echo "Triggering ETL run for script '${script}' on environment: ${params.ENV}"
-                timeout ${env.SCRIPT_TIMEOUT} ./scripts/trigger_gcp_run.sh --env ${params.ENV} --script ${script}${extraArgs}${dryRunFlag}
-            """
-            break
-        case 'delete':
-            sh """
-                echo "Deleting ETL artifacts for script '${script}' on environment: ${params.ENV}"
-                timeout ${env.SCRIPT_TIMEOUT} ./scripts/delete_etl.sh --env ${params.ENV} --script ${script}${extraArgs}${dryRunFlag}
-            """
-            break
-        default:
-            error("Unknown action: ${action}")
+// Helper function to run deployment preparation
+def runDeployPrep() {
+    echo "Running deployment preparation"
+    sh """
+        chmod +x scripts/deploy_etl.sh
+        docker run --rm \
+            -v ${WORKSPACE}:/workspace \
+            -w /workspace \
+            -e ENVIRONMENT=${params.environment} \
+            ${DOCKER_IMAGE}:${DOCKER_TAG} \
+            /workspace/scripts/deploy_etl.sh prep
+    """
+}
+
+// Helper function to run Ansible playbooks
+def runPlaybook(String playbook, Map extraVars = [:]) {
+    echo "Running Ansible playbook: ${playbook}"
+    
+    def extraVarsString = ""
+    if (extraVars) {
+        def varsList = extraVars.collect { key, value -> "${key}=${value}" }
+        extraVarsString = "--extra-vars \"${varsList.join(' ')}\""
+    }
+    
+    sh """
+        docker run --rm \
+            -v ${WORKSPACE}:/workspace \
+            -v ~/.aws:/root/.aws:ro \
+            -w /workspace \
+            -e ANSIBLE_CONFIG=/workspace/ansible/ansible.cfg \
+            -e ENVIRONMENT=${params.environment} \
+            ${DOCKER_IMAGE}:${DOCKER_TAG} \
+            ansible-playbook \
+                -i ansible/inventory/localhost.yml \
+                ansible/playbooks/${playbook} \
+                ${extraVarsString} \
+                -v
+    """
+}
+
+// Helper function to publish test results
+def publishTestResults(String pattern) {
+    if (fileExists(pattern)) {
+        publishTestResults([
+            $class: 'JUnitResultArchiver',
+            testResultsPattern: pattern
+        ])
     }
 }

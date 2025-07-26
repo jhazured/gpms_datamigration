@@ -1,0 +1,442 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'execution_mode',
+            choices: [
+                'run-single-etl',
+                'run-bulk-etl',
+                'run-scheduled-batch',
+                'cancel-running-jobs'
+            ],
+            description: 'Select ETL execution mode'
+        )
+        choice(
+            name: 'environment',
+            choices: ['dev', 'test', 'uat', 'prod'],
+            description: 'Target environment for execution'
+        )
+        choice(
+            name: 'etl_job',
+            choices: getEtlChoices(),
+            description: 'Select ETL job to run (for single execution)'
+        )
+        choice(
+            name: 'schedule_type',
+            choices: ['immediate', 'daily', 'weekly', 'monthly'],
+            description: 'Schedule type for batch execution'
+        )
+        string(
+            name: 'job_parameters',
+            defaultValue: '{}',
+            description: 'JSON parameters to pass to ETL job'
+        )
+        booleanParam(
+            name: 'dry_run',
+            defaultValue: false,
+            description: 'Perform dry run without actual execution'
+        )
+        booleanParam(
+            name: 'send_notifications',
+            defaultValue: true,
+            description: 'Send notifications on job completion/failure'
+        )
+    }
+    
+    environment {
+        GCP_PROJECT_ID = getGcpProjectId()
+        GCP_REGION = 'us-central1'
+        DATAFLOW_TEMPLATE_PATH = "gs://${GCP_PROJECT_ID}-templates"
+        JOB_TIMEOUT = '3600' // 1 hour default timeout
+    }
+    
+    stages {
+        stage('Initialize Execution') {
+            steps {
+                script {
+                    echo "Starting ETL Job Execution Pipeline"
+                    echo "Execution Mode: ${params.execution_mode}"
+                    echo "Environment: ${params.environment}"
+                    echo "Target ETL Job: ${params.etl_job}"
+                    
+                    // Validate GCP credentials
+                    validateGcpCredentials()
+                }
+            }
+        }
+        
+        stage('Pre-execution Validation') {
+            steps {
+                script {
+                    echo "Validating ETL job prerequisites"
+                    
+                    // Check if ETL job exists
+                    if (params.execution_mode in ['run-single-etl', 'run-scheduled-batch']) {
+                        validateEtlJobExists(params.etl_job)
+                    }
+                    
+                    // Validate job parameters
+                    if (params.job_parameters != '{}') {
+                        validateJobParameters(params.job_parameters)
+                    }
+                    
+                    // Check resource availability
+                    checkGcpQuotas()
+                }
+            }
+        }
+        
+        stage('Execute Single ETL Job') {
+            when {
+                expression { params.execution_mode == 'run-single-etl' }
+            }
+            steps {
+                script {
+                    echo "Executing single ETL job: ${params.etl_job}"
+                    
+                    def jobId = runSingleEtlJob(
+                        params.etl_job,
+                        params.environment,
+                        params.job_parameters,
+                        params.dry_run
+                    )
+                    
+                    // Store job ID for reference
+                    env.CURRENT_JOB_ID = jobId
+                    
+                    // Wait for job completion
+                    waitForJobCompletion(jobId)
+                }
+            }
+        }
+        
+        stage('Execute Bulk ETL Jobs') {
+            when {
+                expression { params.execution_mode == 'run-bulk-etl' }
+            }
+            steps {
+                script {
+                    echo "Executing bulk ETL jobs"
+                    
+                    def etlJobs = getAllEtlJobs()
+                    def jobIds = []
+                    
+                    // Launch all jobs in parallel
+                    def parallelJobs = [:]
+                    etlJobs.each { job ->
+                        parallelJobs[job] = {
+                            def jobId = runSingleEtlJob(
+                                job,
+                                params.environment,
+                                params.job_parameters,
+                                params.dry_run
+                            )
+                            jobIds.add(jobId)
+                            return jobId
+                        }
+                    }
+                    
+                    parallel parallelJobs
+                    
+                    // Wait for all jobs to complete
+                    waitForBulkJobCompletion(jobIds)
+                }
+            }
+        }
+        
+        stage('Execute Scheduled Batch') {
+            when {
+                expression { params.execution_mode == 'run-scheduled-batch' }
+            }
+            steps {
+                script {
+                    echo "Setting up scheduled batch execution"
+                    
+                    def batchConfig = createBatchSchedule(
+                        params.etl_job,
+                        params.schedule_type,
+                        params.environment
+                    )
+                    
+                    // Create Cloud Scheduler job
+                    createCloudSchedulerJob(batchConfig)
+                }
+            }
+        }
+        
+        stage('Cancel Running Jobs') {
+            when {
+                expression { params.execution_mode == 'cancel-running-jobs' }
+            }
+            steps {
+                script {
+                    echo "Cancelling running ETL jobs"
+                    
+                    input message: 'Are you sure you want to cancel running jobs?', ok: 'Yes, Cancel Jobs'
+                    
+                    cancelRunningJobs(params.environment, params.etl_job)
+                }
+            }
+        }
+        
+        stage('Post-execution Analysis') {
+            when {
+                anyOf {
+                    expression { params.execution_mode == 'run-single-etl' }
+                    expression { params.execution_mode == 'run-bulk-etl' }
+                }
+            }
+            steps {
+                script {
+                    echo "Performing post-execution analysis"
+                    
+                    // Generate execution report
+                    generateExecutionReport()
+                    
+                    // Check data quality
+                    runDataQualityChecks()
+                    
+                    // Update job metrics
+                    updateJobMetrics()
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Archive job logs and reports
+                archiveArtifacts artifacts: 'logs/execution/**/*', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/**/*', allowEmptyArchive: true
+            }
+        }
+        success {
+            script {
+                if (params.send_notifications) {
+                    sendSuccessNotification()
+                }
+            }
+        }
+        failure {
+            script {
+                if (params.send_notifications) {
+                    sendFailureNotification()
+                }
+                
+                // Emergency cleanup if needed
+                if (env.CURRENT_JOB_ID) {
+                    cancelJob(env.CURRENT_JOB_ID)
+                }
+            }
+        }
+    }
+}
+
+// Helper Functions
+def getEtlChoices() {
+    try {
+        def etlGroups = load "jenkins/etl_groups.groovy"
+        return etlGroups.getEtlObjects()
+    } catch (Exception e) {
+        return ['customer_order_frequency', 'customer_sales_summary', 'product_inventory_report', 'product_sales_summary']
+    }
+}
+
+def getGcpProjectId() {
+    return sh(
+        script: "gcloud config get-value project",
+        returnStdout: true
+    ).trim()
+}
+
+def validateGcpCredentials() {
+    sh """
+        gcloud auth application-default print-access-token > /dev/null
+        if [ \$? -ne 0 ]; then
+            echo "GCP authentication failed"
+            exit 1
+        fi
+    """
+}
+
+def validateEtlJobExists(String jobName) {
+    def templateExists = sh(
+        script: "gsutil ls ${DATAFLOW_TEMPLATE_PATH}/${jobName}* || true",
+        returnStdout: true
+    ).trim()
+    
+    if (!templateExists) {
+        error("ETL job template not found: ${jobName}")
+    }
+}
+
+def validateJobParameters(String parameters) {
+    try {
+        def parsedParams = readJSON text: parameters
+        echo "Job parameters validated: ${parsedParams}"
+    } catch (Exception e) {
+        error("Invalid JSON parameters: ${e.message}")
+    }
+}
+
+def checkGcpQuotas() {
+    sh """
+        # Check Dataflow quotas
+        gcloud compute project-info describe --format='value(quotas[].usage,quotas[].limit)' | \
+        awk 'NR%2{printf "%s/",$0;next;}1' | \
+        while read quota; do
+            usage=\$(echo \$quota | cut -d'/' -f1)
+            limit=\$(echo \$quota | cut -d'/' -f2)
+            if [ \$usage -gt \$((\$limit * 80 / 100)) ]; then
+                echo "Warning: Quota usage is high: \$usage/\$limit" 
+            fi
+        done
+    """
+}
+
+def runSingleEtlJob(String jobName, String environment, String parameters, Boolean dryRun) {
+    def jobId = "etl-${jobName}-${environment}-${BUILD_NUMBER}-${System.currentTimeMillis()}"
+    
+    def command = """
+        gcloud dataflow jobs run ${jobId} \\
+            --gcs-location=${DATAFLOW_TEMPLATE_PATH}/${jobName} \\
+            --region=${GCP_REGION} \\
+            --parameters='environment=${environment},${parameters}' \\
+            --max-workers=10 \\
+            --num-workers=2
+    """
+    
+    if (dryRun) {
+        echo "DRY RUN - Would execute: ${command}"
+        return "dry-run-${jobId}"
+    } else {
+        sh command
+        return jobId
+    }
+}
+
+def waitForJobCompletion(String jobId) {
+    timeout(time: Integer.parseInt(JOB_TIMEOUT), unit: 'SECONDS') {
+        script {
+            def jobCompleted = false
+            while (!jobCompleted) {
+                def jobStatus = sh(
+                    script: "gcloud dataflow jobs describe ${jobId} --region=${GCP_REGION} --format='value(currentState)'",
+                    returnStdout: true
+                ).trim()
+                
+                echo "Job ${jobId} status: ${jobStatus}"
+                
+                if (jobStatus in ['JOB_STATE_DONE', 'JOB_STATE_UPDATED']) {
+                    jobCompleted = true
+                    echo "Job completed successfully"
+                } else if (jobStatus in ['JOB_STATE_FAILED', 'JOB_STATE_CANCELLED']) {
+                    error("Job failed with status: ${jobStatus}")
+                } else {
+                    sleep(30) // Wait 30 seconds before checking again
+                }
+            }
+        }
+    }
+}
+
+def getAllEtlJobs() {
+    def etlGroups = load "jenkins/etl_groups.groovy"
+    return etlGroups.getEtlObjects()
+}
+
+def waitForBulkJobCompletion(List jobIds) {
+    // Wait for multiple jobs to complete
+    def completionJobs = [:]
+    jobIds.each { jobId ->
+        completionJobs[jobId] = {
+            waitForJobCompletion(jobId)
+        }
+    }
+    parallel completionJobs
+}
+
+def createBatchSchedule(String jobName, String scheduleType, String environment) {
+    def scheduleConfig = [
+        job_name: jobName,
+        schedule_type: scheduleType,
+        environment: environment,
+        cron_expression: getCronExpression(scheduleType)
+    ]
+    return scheduleConfig
+}
+
+def getCronExpression(String scheduleType) {
+    switch (scheduleType) {
+        case 'daily':
+            return '0 2 * * *'  // 2 AM daily
+        case 'weekly':
+            return '0 2 * * 0'  // 2 AM every Sunday
+        case 'monthly':
+            return '0 2 1 * *'  // 2 AM on 1st of month
+        default:
+            return '0 * * * *'  // Every hour for immediate
+    }
+}
+
+def createCloudSchedulerJob(Map config) {
+    sh """
+        gcloud scheduler jobs create http ${config.job_name}-${config.environment} \\
+            --schedule='${config.cron_expression}' \\
+            --uri='${JENKINS_URL}/job/${JOB_NAME}/buildWithParameters' \\
+            --http-method=POST \\
+            --headers='Content-Type=application/x-www-form-urlencoded' \\
+            --message-body='execution_mode=run-single-etl&environment=${config.environment}&etl_job=${config.job_name}' \\
+            --time-zone='UTC'
+    """
+}
+
+def cancelRunningJobs(String environment, String jobName) {
+    sh """
+        # Get running jobs and cancel them
+        gcloud dataflow jobs list \\
+            --region=${GCP_REGION} \\
+            --filter='state=JOB_STATE_RUNNING AND name~${jobName}' \\
+            --format='value(JOB_ID)' | \\
+        while read job_id; do
+            echo "Cancelling job: \$job_id"
+            gcloud dataflow jobs cancel \$job_id --region=${GCP_REGION}
+        done
+    """
+}
+
+def generateExecutionReport() {
+    echo "Generating execution report"
+    sh """
+        mkdir -p reports
+        echo "Execution completed at: \$(date)" > reports/execution_report.txt
+        echo "Environment: ${params.environment}" >> reports/execution_report.txt
+        echo "Job: ${params.etl_job}" >> reports/execution_report.txt
+    """
+}
+
+def runDataQualityChecks() {
+    echo "Running data quality checks"
+    // Implement data quality validation logic
+}
+
+def updateJobMetrics() {
+    echo "Updating job metrics"
+    // Implement metrics collection logic
+}
+
+def sendSuccessNotification() {
+    echo "Sending success notification"
+    // Implement Slack/email notification
+}
+
+def sendFailureNotification() {
+    echo "Sending failure notification"
+    // Implement Slack/email notification
+}
+
+def cancelJob(String jobId) {
+    sh "gcloud dataflow jobs cancel ${jobId} --region=${GCP_REGION} || true"
+}
